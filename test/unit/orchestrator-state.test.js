@@ -857,6 +857,49 @@ test("truncated repair output is rejected without storing raw provider output", 
   }
 });
 
+test("a collaboration round heals a transient failure on retry and assesses the recovered control (H8)", async (t) => {
+  const session = await createSession("collab-auto-retry-heal");
+  let claudeCalls = 0;
+  let codexCalls = 0;
+
+  t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls += 1;
+    if (claudeCalls === 1) return providerResult("Claude opening thoughts."); // round 1 opening — no control
+    if (claudeCalls === 2) {
+      // Round 2's first attempt writes part of a rebuttal, then the CLI dies (a "partial" turn).
+      const error = new Error("transient blip mid-round");
+      error.partial = "half a rebuttal";
+      throw error;
+    }
+    return providerResult(`Claude, on retry, agrees.\n${controlBlock("satisfied", [])}`); // round 2 retry
+  });
+  t.mock.method(provider("codex"), "run", async () => {
+    codexCalls += 1;
+    if (codexCalls === 1) return providerResult("Codex opening thoughts.");
+    return providerResult(`Codex agrees.\n${controlBlock("satisfied", [])}`);
+  });
+
+  try {
+    await runOrchestration(session.id, { ...collaborationRequest("Cache strategy?"), rounds: 2 }, () => {});
+
+    const saved = await getSession(session.id);
+    assert.equal(claudeCalls, 3); // round-1 opening + round-2 failure + round-2 retry
+    assert.equal(saved.status, "completed");
+    // The failed attempt's partial is pruned, leaving exactly one round-2 Claude turn — the recovered answer.
+    assert.ok(!saved.messages.some((message) => message.meta?.status === "partial"));
+    const round2Claude = saved.messages.filter((message) => message.author === "agent" && message.agent === "claude" && message.round === 2);
+    assert.equal(round2Claude.length, 1);
+    assert.equal(round2Claude[0].meta?.status, "completed");
+    assert.match(round2Claude[0].content, /on retry, agrees/);
+    // The recovered turn's control fed the round assessment — the run converged on it rather than erroring.
+    const outcome = saved.messages.find((message) => message.meta?.outcome)?.meta.outcome;
+    assert.equal(outcome.agreementState, "converged");
+    assert.equal(outcome.completionState, "satisfied");
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
 test("a debate runs opening then rebuttal, converges early, and finalizes once", async (t) => {
   const session = await createSession("debate-convergence");
   let claudeCalls = 0;
@@ -949,13 +992,15 @@ test("orchestration request validation rejects unsupported or inconsistent confi
   }
 });
 
-test("2026-07-16 regression: provider failure stays terminal after a late sibling result", async (t) => {
+test("2026-07-16 regression: a failure that survives its auto-retry stays terminal, without discarding a finished sibling", async (t) => {
   const session = await createSession("provider-failure-race");
   const releaseCodex = deferred();
   const claudeFailed = deferred();
   const events = [];
+  let claudeCalls = 0;
 
   t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls += 1;
     claudeFailed.resolve();
     throw new Error("controlled provider failure");
   });
@@ -973,15 +1018,57 @@ test("2026-07-16 regression: provider failure stays terminal after a late siblin
     await drainSessionWrites(session.id);
 
     const saved = await getSession(session.id);
+    // Claude fails on the original attempt AND its one automatic retry, so the run is still terminal — and the
+    // terminal claim stays singular even though a sibling finished in between (the original race guard holds).
+    assert.equal(claudeCalls, 2);
     assert.equal(saved.status, "error");
     assert.equal(saved.activeRun.status, "error");
     assert.ok(saved.activeRun.endedAt);
-    assert.equal(saved.messages.some((message) => message.content === "late Codex response"), false);
     assert.equal(events.filter((event) => event.type === "run_error").length, 1);
-    assert.equal(events.some((event) => event.type === "agent_complete" && event.agent === "codex"), false);
     assertSingleRunIdentity(events);
+    // But one agent's terminal failure no longer throws away a sibling that already finished: Codex's answer
+    // (produced before the failure became terminal) is kept, not discarded as under the old fail-fast join.
+    assert.equal(saved.messages.some((message) => message.content === "late Codex response"), true);
+    assert.ok(events.some((event) => event.type === "agent_complete" && event.agent === "codex"));
   } finally {
     releaseCodex.resolve();
+    await cleanupSession(session.id);
+  }
+});
+
+test("a transient provider failure heals on the automatic retry, pruning the failed attempt's partial (H8)", async (t) => {
+  const session = await createSession("provider-auto-retry-heal");
+  const events = [];
+  let claudeCalls = 0;
+
+  t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls += 1;
+    if (claudeCalls === 1) {
+      // First attempt writes some output, then the CLI dies — callAgent saves that as a "partial" turn.
+      const error = new Error("transient blip after partial output");
+      error.partial = "half-written answer";
+      throw error;
+    }
+    return providerResult("Claude recovered on retry");
+  });
+  t.mock.method(provider("codex"), "run", async () => providerResult("Codex answer"));
+
+  try {
+    await runOrchestration(session.id, chatRequest("Heal a transient failure"), (event) => events.push(event));
+    await drainSessionWrites(session.id);
+
+    const saved = await getSession(session.id);
+    assert.equal(claudeCalls, 2); // failed once, retried once
+    assert.notEqual(saved.status, "error"); // the round completed despite the first-attempt failure
+    // Exactly one Claude turn survives — the retry's success — and the failed attempt's partial was pruned,
+    // so the reader never sees a stale half-answer sitting next to the recovered one.
+    const claudeTurns = saved.messages.filter((message) => message.author === "agent" && message.agent === "claude");
+    assert.equal(claudeTurns.length, 1);
+    assert.equal(claudeTurns[0].content, "Claude recovered on retry");
+    assert.equal(claudeTurns[0].meta?.status, "completed");
+    assert.ok(!saved.messages.some((message) => message.meta?.status === "partial"));
+    assert.ok(events.some((event) => event.type === "agent_complete" && event.agent === "claude"));
+  } finally {
     await cleanupSession(session.id);
   }
 });

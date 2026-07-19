@@ -435,24 +435,33 @@ async function settlePendingProviders(state, timeoutMs = 5000) {
   return completed;
 }
 
-async function runParallel(factories, state) {
-  let primaryError = null;
-  const tasks = factories.map(async (factory) => {
-    try {
-      return await factory();
-    } catch (error) {
-      if (!error.runInactive && requestRunFailure(state)) {
-        primaryError = error;
-        await terminateRunChildren(state);
-      }
-      throw error;
-    }
-  });
-  const outcomes = await Promise.allSettled(tasks);
+// Run one round of agents in parallel with single-provider fault tolerance. Unlike a fail-fast join, one
+// agent's failure no longer aborts the round: the siblings finish, then each failed agent is retried once
+// automatically (its failed partial is pruned first, so a successful retry leaves exactly one turn for that
+// agent/round). A user cancellation still aborts immediately; only a failure that survives the retry claims
+// the run failure and terminates any stragglers — the same terminal outcome as before, just reached after
+// the siblings had their turn instead of the instant the first agent fell over. Each unit is
+// { run: () => Promise<message>, prune?: () => void }.
+async function runResilientRound(units, state, autoRetries = 1) {
+  const providerFailure = (outcome) => outcome.status === "rejected" && !outcome.reason?.runInactive;
+  const outcomes = await Promise.allSettled(units.map((unit) => unit.run()));
   if (runWasCancelled(state)) throw runInactiveError(state);
-  if (primaryError) throw primaryError;
+  for (let pass = 0; pass < autoRetries; pass += 1) {
+    const failed = outcomes.map((outcome, i) => (providerFailure(outcome) ? i : -1)).filter((i) => i >= 0);
+    if (!failed.length) break;
+    // Claiming failure flips the run to "failing", which would reject the retry itself — so we never claim it
+    // until the retries are spent. Prune each failed attempt's partial before re-running so a success replaces
+    // it rather than sitting beside it.
+    await Promise.all(failed.map((i) => units[i].prune?.()));
+    const retried = await Promise.allSettled(failed.map((i) => units[i].run()));
+    if (runWasCancelled(state)) throw runInactiveError(state);
+    failed.forEach((i, k) => { outcomes[i] = retried[k]; });
+  }
   const rejected = outcomes.find((outcome) => outcome.status === "rejected");
-  if (rejected) throw rejected.reason;
+  if (rejected) {
+    if (!rejected.reason?.runInactive && requestRunFailure(state)) await terminateRunChildren(state);
+    throw rejected.reason;
+  }
   return outcomes.map((outcome) => outcome.value);
 }
 
@@ -828,6 +837,24 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       return message;
     };
 
+    // Drop a failed attempt's partial turn so a successful auto-retry (runResilientRound) leaves exactly one
+    // message for (agent, round) — the recovered answer — instead of a stale partial sitting next to it. The
+    // partial was already persisted and the store merge is union-by-id, so it has to be removed from the store
+    // too, or the retry's next persist merges it right back in.
+    const pruneFailedAttempt = async (agent, round) => {
+      const i = session.messages.findIndex(
+        (m) => m.author === "agent" && m.agent === agent && m.round === round && m.meta?.status === "partial",
+      );
+      if (i < 0) return;
+      const [removed] = session.messages.splice(i, 1);
+      await mutateSession(session.id, (latest) => {
+        const kept = (latest.messages || []).filter((m) => m.id !== removed.id);
+        if (kept.length === (latest.messages || []).length) return SKIP_SESSION_WRITE;
+        latest.messages = kept;
+        return true;
+      });
+    };
+
     let completedRounds = 0;
     let itemRegistry = [];
     let lastAssessment = null;
@@ -852,7 +879,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
     if (mode === "chat") {
       // Simple chat: each agent answers the user independently, in parallel, one pass.
       const snapshot = structuredClone(session);
-      await runParallel(selected.map((agent) => () => {
+      await runResilientRound(selected.map((agent) => {
         const prompt = chatPrompt({
           session: snapshot,
           agentLabel: provider(agent).label,
@@ -865,13 +892,13 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           },
           projectSnapshot: projSnapshot,
         });
-        return callAgent(agent, prompt, 1, "chat");
+        return { run: () => callAgent(agent, prompt, 1, "chat"), prune: () => pruneFailedAttempt(agent, 1) };
       }), state);
     } else if (mode === "collaboration") {
       for (let round = 1; round <= rounds; round += 1) {
         if (round === 1) {
           const openingSession = structuredClone(session);
-          await runParallel(selected.map((agent) => () => {
+          await runResilientRound(selected.map((agent) => {
             const prompt = collaborationPrompt({
               session: openingSession,
               agentLabel: provider(agent).label,
@@ -881,7 +908,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
               userTask,
               projectSnapshot: projSnapshot,
             });
-            return callAgent(agent, prompt, round, "collaboration");
+            return { run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
           }), state);
           completedRounds = round;
           continue;
@@ -892,7 +919,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         // round is a confirmation round: a tightened prompt asks agents to only re-open on a genuine
         // decision change, so it stops here instead of drifting into marginal re-tweaks.
         const confirmationRound = lastAssessment?.awaitingConfirmation === true;
-        const roundMessages = await runParallel(selected.map((agent) => () => {
+        const roundMessages = await runResilientRound(selected.map((agent) => {
           const prompt = collaborationPrompt({
             session: snapshot,
             agentLabel: provider(agent).label,
@@ -905,7 +932,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             itemRegistry,
             confirmationRound,
           });
-          return callAgent(agent, prompt, round, "collaboration");
+          return { run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry);
         lastAssessment = assessment;
@@ -922,7 +949,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       // last rebuttal, so fall back to the user's message as the proposition.
       const proposition = previousMode === "debate" ? "" : lastSubstantiveAnswer(session);
       const openingSession = structuredClone(session);
-      await runParallel(selected.map((agent) => () => {
+      await runResilientRound(selected.map((agent) => {
         const opponent = selected.find((key) => key !== agent);
         const prompt = debatePrompt({
           session: openingSession,
@@ -936,7 +963,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           projectSnapshot: projSnapshot,
           proposition,
         });
-        return callAgent(agent, prompt, 1, "opening");
+        return { run: () => callAgent(agent, prompt, 1, "opening"), prune: () => pruneFailedAttempt(agent, 1) };
       }), state);
       completedRounds = 1;
 
@@ -946,7 +973,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         // Confirmation round (see the collaboration loop): the previous round converged but carried a late
         // change the others hadn't seen, so this round gets the tightened confirm-only prompt.
         const confirmationRound = lastAssessment?.awaitingConfirmation === true;
-        const roundMsgs = await runParallel(selected.map((agent) => () => {
+        const roundMsgs = await runResilientRound(selected.map((agent) => {
           const opponent = selected.find((key) => key !== agent);
           const prompt = debatePrompt({
             session: snapshot,
@@ -963,7 +990,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             proposition,
             confirmationRound,
           });
-          return callAgent(agent, prompt, round, "rebuttal");
+          return { run: () => callAgent(agent, prompt, round, "rebuttal"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry);
         lastAssessment = assessment;
