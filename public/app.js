@@ -61,6 +61,16 @@ const ATTACH_MAX_TOTAL_BYTES = 300 * 1024;
 // Command/Effort element, so saveSettings/loadSettings must keep their `if (!$(id)) continue` guards.
 const settingsIds = () => ["rounds", "finalizer", ...providers.flatMap((item) => ["Command", "Model", "Effort", "Role", "Enabled"].map((suffix) => `${item.id}${suffix}`))];
 const providerInfo = (id) => providers.find((item) => item.id === id) || { id, label: id || "Agent" };
+// A distinct mark per provider, drawn in the provider's brand colour (currentColor), so Claude, Codex and
+// Cursor — whose labels all start with "C" — are told apart at a glance instead of every avatar showing the
+// letter "C". Authored inline SVG (never user data), so it's safe to inject; unknown providers fall back to
+// their first letter.
+const PROVIDER_GLYPHS = {
+  claude: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 2.6v18.8M2.6 12h18.8M5.3 5.3l13.4 13.4M18.7 5.3L5.3 18.7"/></svg>`,
+  codex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.6 7.4 4 12l4.6 4.6M15.4 7.4 20 12l-4.6 4.6"/></svg>`,
+  cursor: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.5 3 11.2 19.5l2.3-6.4 6.4-2.3z"/></svg>`,
+};
+const providerGlyph = (id, label) => PROVIDER_GLYPHS[id] || esc(String(label || id || "?").slice(0, 1));
 
 /* ---------------- i18n ---------------- */
 const t = (key) => STRINGS[lang][key];
@@ -301,7 +311,7 @@ async function loadProviderCatalog() {
     }).join("");
     card.setAttribute("aria-labelledby", titleId);
     card.innerHTML = [
-      `<div class="agent-head"><span class="agent-avatar ${esc(item.id)}" aria-hidden="true">${esc(item.label.slice(0, 1))}</span>`,
+      `<div class="agent-head"><span class="agent-avatar ${esc(item.id)}" aria-hidden="true">${providerGlyph(item.id, item.label)}</span>`,
       `<div class="agent-id"><h3 id="${esc(titleId)}">${esc(item.label)}</h3>${item.descriptorLaunch ? "" : `<span id="${esc(item.id)}Health" class="health" role="status" aria-live="polite" data-i18n="notChecked">${esc(t("notChecked"))}</span>`}</div>`,
       `<label class="switch" for="${esc(enabledId)}"><input id="${esc(enabledId)}" type="checkbox" ${item.defaultEnabled === false ? "" : "checked"} data-provider-toggle="${esc(item.id)}" aria-label="${esc(t("providerEnabled")(item.label))}"><span aria-hidden="true"></span></label></div>`,
       `<div class="agent-fields">${item.descriptorLaunch ? "" : `<div class="field"><label for="${esc(commandId)}" data-i18n="command">${esc(t("command"))}</label><div class="inline"><input id="${esc(commandId)}" value="${esc(item.command)}"><button class="btn-mini check-cli" data-agent="${esc(item.id)}" data-i18n="check" aria-label="${esc(t("checkProvider")(item.label))}">${esc(t("check"))}</button><button class="btn-mini setup-cli" data-agent="${esc(item.id)}" data-i18n="setupCli" aria-label="${esc(t("setupProviderCli")(item.label))}" aria-expanded="false" aria-controls="${esc(item.id)}CliSetup">${esc(t("setupCli"))}</button></div></div>`}`,
@@ -1069,7 +1079,7 @@ function renderMessages() {
       const ctx = meta.contextChars ? ` · ${esc(t("contextWord"))} ${bdi(formatLocaleNumber(lang, meta.contextChars))}` : "";
       const footer = metaParts.length ? `<div class="msg-meta">${metaParts.join(" · ")}${ctx}</div>` : "";
       el.innerHTML =
-        `<div class="msg-head"><span class="agent-avatar ${esc(info.id)}" aria-hidden="true">${esc(name.slice(0, 1))}</span>` +
+        `<div class="msg-head"><span class="agent-avatar ${esc(info.id)}" aria-hidden="true">${providerGlyph(info.id, name)}</span>` +
         `<span class="msg-name">${bdi(name)}</span>${badges}<span class="msg-time">${bdi(time)}</span></div>` +
         `<div class="msg-body"><div class="msg-content md">${renderMarkdown(msg.content)}</div>${footer}${techHtml}</div>`;
     } else if (msg.author === "user") {
@@ -2344,7 +2354,7 @@ function renderDecisionCards() {
     card.className = `dcard ${esc(provider.id)}`;
     card.setAttribute("aria-labelledby", nameId);
     const badge = message ? phaseLabel(message.phase) : "";
-    const head = `<div class="dcard-head"><div class="dcard-id"><span class="agent-avatar ${esc(provider.id)}" aria-hidden="true">${esc(String(provider.label).slice(0, 1))}</span><strong id="${esc(nameId)}">${bdi(provider.label)}</strong></div>${badge ? `<span class="badge">${esc(badge)}</span>` : ""}</div>`;
+    const head = `<div class="dcard-head"><div class="dcard-id"><span class="agent-avatar ${esc(provider.id)}" aria-hidden="true">${providerGlyph(provider.id, provider.label)}</span><strong id="${esc(nameId)}">${bdi(provider.label)}</strong></div>${badge ? `<span class="badge">${esc(badge)}</span>` : ""}</div>`;
     let body;
     if (message) {
       const meta = message.meta || {};
@@ -2449,7 +2459,7 @@ function renderLiveStrip() {
   strip.hidden = false;
   strip.innerHTML = ids.map((id) => {
     const info = providerInfo(id);
-    return `<div class="live-actor"><span class="agent-avatar ${esc(info.id)}" aria-hidden="true">${esc(String(info.label).slice(0, 1))}</span><div><strong>${bdi(info.label)}</strong><span dir="auto">${esc(liveAgents[id])}</span></div></div>`;
+    return `<div class="live-actor"><span class="agent-avatar ${esc(info.id)}" aria-hidden="true">${providerGlyph(info.id, info.label)}</span><div><strong>${bdi(info.label)}</strong><span dir="auto">${esc(liveAgents[id])}</span></div></div>`;
   }).join("");
 }
 // Single re-render entry point, called from renderMessages() so it tracks every session/SSE update.
