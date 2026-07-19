@@ -1390,12 +1390,13 @@ function humanizeActivity(evt) {
 function handleEvent(event) {
   if (event.type === "session_updated") loadSession();
   if (!shouldHandleRunEvent(currentRunId, event)) return;
-  if (event.type === "run_started") { currentRunId = event.runId; liveAgents = {}; renderLiveStrip(); setRunning(true, `${discussionModeLabel(event.mode)} · ${formatLocaleNumber(lang, event.rounds)} ${t("roundsShort")}`); }
+  if (event.type === "run_started") { currentRunId = event.runId; liveAgents = {}; streamingText = {}; renderLiveStrip(); setRunning(true, `${discussionModeLabel(event.mode)} · ${formatLocaleNumber(lang, event.rounds)} ${t("roundsShort")}`); }
   if (event.type === "agent_start") { const s = `${phaseLabel(event.phase)} · ${t("roundWord")} ${formatLocaleNumber(lang, event.round)}`; liveAgents[event.agent] = s; renderLiveStrip(); setAgentState(event.agent, s, "running"); }
   if (event.type === "agent_activity" && event.event?.text) { const s = humanizeActivity(event.event); if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); } setAgentState(event.agent, s, "running"); }
-  if (event.type === "agent_complete") { liveAgents[event.agent] = t("replied"); renderLiveStrip(); setAgentState(event.agent, t("replied"), "done"); }
+  if (event.type === "agent_complete") { delete streamingText[event.agent]; liveAgents[event.agent] = t("replied"); renderLiveStrip(); setAgentState(event.agent, t("replied"), "done"); }
+  if (event.type === "agent_delta") { streamingText[event.agent] = event.text; try { renderDecisionCards(); } catch { /* decision cards not mounted in this view */ } }
   if (["run_complete","run_stopped","run_error"].includes(event.type)) {
-    liveAgents = {}; renderLiveStrip();
+    liveAgents = {}; streamingText = {}; renderLiveStrip();
     setRunning(false, event.type === "run_complete" ? t("runDone") : event.type === "run_stopped" ? t("runStopped") : localizedFailure({ code: event.code, detail: event.error }));
     currentRunId = null;
     loadSession(); refreshSessions();
@@ -2257,6 +2258,7 @@ const ROOM_PHASES = {
 const STAGE_KEYS = ["stagePlan", "stageCollab", "stageDecision", "stageExecute", "stageReview", "stageAccept"];
 const STAGE_INDEX = { plan: 0, collaboration: 1, decision: 2, execute: 3 };
 let liveAgents = {};
+let streamingText = {};
 
 const TERMINAL_EXEC = new Set(["merged", "pr_opened", "rejected", "blocked_secret"]);
 function pendingExecution() {
@@ -2370,7 +2372,12 @@ function renderDecisionCards() {
     const badge = message ? phaseLabel(message.phase) : "";
     const head = `<div class="dcard-head"><div class="dcard-id"><span class="agent-avatar ${esc(provider.id)}" aria-hidden="true">${providerGlyph(provider.id, provider.label)}</span><strong id="${esc(nameId)}">${bdi(provider.label)}</strong></div>${badge ? `<span class="badge">${esc(badge)}</span>` : ""}</div>`;
     let body;
-    if (message) {
+    const streaming = streamingText[provider.id];
+    if (streaming != null) {
+      // A1: the answer as it streams in (Claude), redacted + control-stripped server-side. A blinking caret
+      // marks it as still forming; agent_complete clears it and the stored final message takes over.
+      body = `<div class="dcard-body md dcard-streaming">${renderMarkdown(String(streaming).slice(0, 600))}<span class="stream-caret" aria-hidden="true"></span></div>`;
+    } else if (message) {
       const meta = message.meta || {};
       const footParts = [
         meta.requestedModel ? bdi(meta.requestedModel, "ltr") : "",

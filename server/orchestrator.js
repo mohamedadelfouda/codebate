@@ -745,6 +745,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       const contextMessages = session.messages.length;
       emit({ type: "agent_start", sessionId, runId: state.runId, agent, label: provider(agent).label, role, round, phase });
       const deltaBuffer = new CappedText();
+      let lastDeltaEmit = 0;
       let result;
       let providerPromise;
       try {
@@ -757,6 +758,13 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             if (!runAcceptsOutput(sessionId, state)) return;
             if (event.kind === "delta") {
               deltaBuffer.append(event.text);
+              // Stream the visible answer to the UI as it forms — throttled so a fast token stream can't flood
+              // SSE, and redacted + control-stripped on every emit so no secret or machine block shows mid-flight.
+              const now = Date.now();
+              if (now - lastDeltaEmit >= 100) {
+                lastDeltaEmit = now;
+                emit({ type: "agent_delta", sessionId, runId: state.runId, agent, text: redact(stripAgentControl(deltaBuffer.toString())), round, phase });
+              }
             } else {
               const visibleEvent = event?.text ? { ...event, text: redact(event.text) } : event;
               emit({ type: "agent_activity", sessionId, runId: state.runId, agent, event: visibleEvent, round, phase });

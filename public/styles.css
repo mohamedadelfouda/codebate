@@ -334,6 +334,9 @@ textarea { resize: none; line-height: 1.55; }
 .dcard-body { padding: 10px; font-size: 12px; color: var(--muted); }
 .dcard-body p { color: var(--muted); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dcard-empty { color: var(--faint); font-style: italic; }
+.dcard-streaming { color: var(--text); }
+.stream-caret { display: inline-block; width: 2px; height: 1em; margin-inline-start: 2px; vertical-align: text-bottom; background: var(--accent); animation: streamBlink 1s steps(2) infinite; }
+@keyframes streamBlink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 .dcard-foot { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line-soft); color: var(--faint); font-size: 10.5px; }
 
 /* Approval gate (surfaced execution decision) */
