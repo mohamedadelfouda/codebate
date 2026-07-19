@@ -32,6 +32,22 @@ test("collaboration opening requests a full proposal without a control block", (
   assert.doesNotMatch(prompt, /<agent-control>/);
 });
 
+test("collaboration roster names the other participants and matches the count", () => {
+  // Three-way session: the acting agent must be told about EACH of the other two by name.
+  const threeWay = collaborationPrompt({ ...base, round: 1, participants: ["Claude", "Codex", "Cursor"] });
+  assert.match(threeWay, /Codex/);
+  assert.match(threeWay, /Cursor/);
+  assert.match(threeWay, /one of 3 agents/);
+  assert.match(threeWay, /3-way discussion/);
+
+  // Two-way session (the common case): singular framing, and NOT the self-contradictory "don't collapse into
+  // two sides" line that only makes sense with three or more.
+  const twoWay = collaborationPrompt({ ...base, round: 1, participants: ["Claude", "Codex"] });
+  assert.match(twoWay, /The other agent at the table is Codex/);
+  assert.match(twoWay, /one of 2 agents/);
+  assert.doesNotMatch(twoWay, /-way discussion/);
+});
+
 test("later collaboration rounds request a versioned control contract", () => {
   const prompt = collaborationPrompt({
     ...base,
