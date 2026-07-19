@@ -771,8 +771,8 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       recordControlRepair(controlRepairStats, audit);
     };
 
-    const assessRepairedRound = async (roundMessages, targetVersion, itemRegistry, confirmationRound = false) => {
-      let assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationRound);
+    const assessRepairedRound = async (roundMessages, targetVersion, itemRegistry) => {
+      let assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry);
       if (!assessment.repairTargets.length) return assessment;
       const originalControls = roundMessages.map((message) => message.control);
       await Promise.all(assessment.repairTargets.map(async (target) => {
@@ -787,7 +787,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       }));
       assertRunAcceptsOutput(sessionId, state);
       if (!(await persistRunProgress(session, state, emit))) throw runInactiveError(state);
-      assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationRound);
+      assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry);
       return assessment;
     };
 
@@ -1068,16 +1068,13 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMessages = await reconcileRound(roundOutcome, minSurvivors);
-        const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry, confirmationRound);
+        const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMessages, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
-        // canStop is checked FIRST: a repeat confirmation round now returns canStop=true even with
-        // proposalChanged=true (the substantiveDelta loop-breaker). The old `if (proposalChanged) …; else if
-        // (canStop)` order would take the proposalChanged branch and loop on forever, never reading canStop.
-        if (assessment.canStop) break;
         if (assessment.proposalChanged) proposalVersion += 1;
+        else if (assessment.canStop) break;
       }
     } else {
       // Anchor the debate to the answer already on the table so a "switch to debate" message
@@ -1133,16 +1130,13 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "rebuttal"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMsgs = await reconcileRound(rebuttalOutcome, minSurvivors);
-        const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry, confirmationRound);
+        const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMsgs, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
-        // canStop is checked FIRST: a repeat confirmation round now returns canStop=true even with
-        // proposalChanged=true (the substantiveDelta loop-breaker). The old `if (proposalChanged) …; else if
-        // (canStop)` order would take the proposalChanged branch and loop on forever, never reading canStop.
-        if (assessment.canStop) break;
         if (assessment.proposalChanged) proposalVersion += 1;
+        else if (assessment.canStop) break;
       }
     }
 

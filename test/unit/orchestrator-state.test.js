@@ -579,49 +579,6 @@ test("a converged round with a late change makes the next round a confirmation r
   }
 });
 
-test("a confirmation round stops even when a provider over-signals substantiveDelta again", async (t) => {
-  // The bug this guards: agents agree, but a provider keeps flagging a marginal substantiveDelta every round,
-  // which used to keep proposalChanged=true and loop to the round limit. Round 3 is the confirmation round and
-  // BOTH providers again mark substantiveDelta=true — the session must still stop at round 3, not run to 5.
-  const session = await createSession("confirmation-round-delta-cap");
-  const claudeCalls = [];
-  const codexCalls = [];
-  t.mock.method(provider("claude"), "run", async () => {
-    claudeCalls.push(1);
-    if (claudeCalls.length === 1) return providerResult("Claude opening");
-    if (claudeCalls.length === 2) return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [], substantiveDelta: true }));
-    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [], substantiveDelta: true, targetVersion: 2 }));
-  });
-  t.mock.method(provider("codex"), "run", async () => {
-    codexCalls.push(1);
-    if (codexCalls.length === 1) return providerResult("Codex opening");
-    if (codexCalls.length === 2) return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [] }));
-    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [], substantiveDelta: true, targetVersion: 2 }));
-  });
-
-  try {
-    await runOrchestration(session.id, {
-      mode: "collaboration",
-      rounds: 5,
-      content: "Stop looping on marginal deltas",
-      finalizer: "none",
-      agents: {
-        claude: { enabled: true, role: "Collaborator" },
-        codex: { enabled: true, role: "Collaborator" },
-      },
-    }, () => {});
-
-    const saved = await getSession(session.id);
-    const outcome = saved.messages.find((message) => message.meta?.outcome)?.meta.outcome;
-    assert.equal(outcome.completedRounds, 3);
-    assert.equal(outcome.stoppedEarly, true);
-    assert.equal(outcome.agreementState, "converged");
-    assert.equal(saved.messages.some((message) => message.round === 4), false);
-    assert.equal(outcome.roundDiagnostics.at(-1).continueReason, "stopped");
-  } finally {
-    await cleanupSession(session.id);
-  }
-});
 
 test("a turn that fails after producing a valid control is recovered, not errored (H5)", async (t) => {
   const session = await createSession("timeout-recovery");

@@ -37,19 +37,21 @@ test("invalid_control report is honest even without per-agent failure data (olde
   assert.doesNotMatch(report, /ترفع عدد الجولات/);
 });
 
-test("invalid_control report reassures when the other agents had actually converged", () => {
-  // A single bad control block sank a round the OTHER agents had converged on — say so, so the user knows it
-  // was a technical hiccup on a near-agreement, not a real deadlock.
+test("invalid_control report notes the other valid controls DECLARED convergence, not that agents agreed", () => {
+  // Codex review (P2): a bad control block sank a round the OTHER controls declared converged. Report that the
+  // valid controls DECLARED convergence (a fact) — not that the agents "actually agreed" (unknowable, since the
+  // malformed provider's position is unknown and valid agents answered from the pre-round snapshot).
   const outcome = invalidControlOutcome({
     roundDiagnostics: [{
       round: 5,
-      controlFailures: [{ agent: "cursor", errorCodes: ["invalid_control_schema"], repairStatus: "failed" }],
+      controlFailures: [{ agent: "cursor", errorCodes: ["invalid_control_schema"], repairStatus: "skipped" }],
       validControlsConverged: true,
     }],
   });
   const report = discussionOutcomeReport(outcome);
   assert.match(report, /Cursor/);
-  assert.match(report, /باقي الوكلاء كانوا فعلاً متفقين/);
+  assert.match(report, /أعلنوا التوافق في بيانات التحكم/);
+  assert.doesNotMatch(report, /كانوا فعلاً متفقين/);
 });
 
 test("invalid_control report does not blame a provider that self-corrected before the final round", () => {
