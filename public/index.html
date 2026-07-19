@@ -7,6 +7,10 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+  <!-- Shared paint-server defs, kept out of any toggleable (display:none) container: Chromium ignores a
+       gradient defined inside a hidden subtree for elements elsewhere that reference it, so the Codex logo
+       went blank whenever the setup drawer was closed. Defining it once here keeps every Codex avatar filled. -->
+  <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute"><defs><linearGradient id="cdxGrad" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#b1a7ff"/><stop offset=".5" stop-color="#7a9dff"/><stop offset="1" stop-color="#3941ff"/></linearGradient></defs></svg>
   <div id="appShell" class="shell">
     <aside id="sessionsRail" class="rail" aria-label="Codebate" tabindex="-1">
       <div class="brand">
