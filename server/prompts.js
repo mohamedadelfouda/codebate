@@ -117,8 +117,11 @@ function controlShape(targetVersion) {
   });
 }
 
-function controlInstruction(targetVersion, itemRegistry = []) {
-  return `End with exactly one machine-readable control block after your reader-facing answer:
+function controlInstruction(targetVersion, itemRegistry = [], confirmationRound = false) {
+  const confirmation = confirmationRound
+    ? `CONFIRMATION ROUND — the group already reached agreement; a participant made a late change last round you may not have seen (everyone works from one shared snapshot, so same-round changes aren't visible until now). Review the latest proposal and the others' most recent turn. Do NOT add optional improvements, rephrasing, or new angles. Set substantiveDelta=true ONLY if you genuinely need to change the shared decision; otherwise set convergence=converged and substantiveDelta=false so the session closes now.\n`
+    : "";
+  return `${confirmation}End with exactly one machine-readable control block after your reader-facing answer:
 <agent-control>${controlShape(targetVersion)}</agent-control>
 Use convergence=converged only if you agree with the latest proposal. goalStatus describes whether the user's actual task is complete, not whether the agents agree. Set substantiveDelta=true only when your answer materially changes the proposal; that creates a newer version and prevents an early stop this round.
 itemProposals are proposals, not official state. For a new item use action=create without itemId or targetItemId. For an existing open item reuse its itemId and use keep_open, resolve, or merge_into; merge_into also requires targetItemId. A user_decision requires user/provide_decision. external_validation requires user, human_operator, or orchestrator with run_external_check. disagreement and remaining_work require agent/resume_agent_round. out_of_scope requires user/provide_decision. Do not include confidence or openPoints in version 2.
@@ -163,7 +166,7 @@ Return exactly one <agent-control> block using this contract:
 Do not use a code fence. Do not write anything after it, and do not write anything before it.`;
 }
 
-export function collaborationPrompt({ session, agentLabel, role, round, totalRounds, userTask, projectSnapshot = "", targetVersion = 1, itemRegistry = [] }) {
+export function collaborationPrompt({ session, agentLabel, role, round, totalRounds, userTask, projectSnapshot = "", targetVersion = 1, itemRegistry = [], confirmationRound = false }) {
   const tools = projectSnapshot
     ? `You can READ the attached project (Read/Grep/Glob) to ground what you say in the real code — read only, never edit or run anything. When you make a claim about the code, point to the file (and the line when you can), and be honest about what you actually checked versus what you're inferring.`
     : `Work from what's in front of you — don't reach for tools, edit files, or run commands.`;
@@ -172,8 +175,10 @@ export function collaborationPrompt({ session, agentLabel, role, round, totalRou
   // Only the final synthesis rebuilds the complete version.
   const guidance = round === 1
     ? `Lay out your take in full this round. Talk through what's already solid in the shared work, what you'd change or add and why, the proposal as you'd shape it now, and anything you're honestly still unsure about. Write it the way you'd talk it through with a colleague you respect — in your own voice, not as a stiff numbered form.`
-    : `This is a later round, so keep it to what's actually new — don't rewrite the whole plan. In a few honest lines: what you now accept from the other agent's last turn, where they're off and why, the one or two things you're really adding this round, and whatever's still open between you. If you've got nothing substantive left to add, just say so — don't pad it out.`;
-  const control = round >= 2 ? `\n${controlInstruction(targetVersion, itemRegistry)}\n` : "";
+    : confirmationRound
+      ? `This is a confirmation round: the group already landed in the same place, and a participant made a late change last round you may not have seen. Read the latest proposal and the others' most recent turn, then either confirm you're still aligned, or — only if it genuinely changes the shared decision — say plainly what has to change. Don't add optional improvements, rephrasing, or new angles.`
+      : `This is a later round, so keep it to what's actually new — don't rewrite the whole plan. In a few honest lines: what you now accept from the other agent's last turn, where they're off and why, the one or two things you're really adding this round, and whatever's still open between you. If you've got nothing substantive left to add, just say so — don't pad it out.`;
+  const control = round >= 2 ? `\n${controlInstruction(targetVersion, itemRegistry, confirmationRound)}\n` : "";
   return `You're ${agentLabel}, one of two agents thinking this through together in a shared session that the user runs and ultimately decides on.
 Your seat at the table: ${role || "Collaborator"}.
 This is round ${round}, and there's room for up to ${totalRounds} — but you're not here to fill rounds. The moment you and the other agent genuinely land in the same place, the session stops early, and that's exactly the outcome we want.
@@ -213,14 +218,14 @@ Shared session transcript (for context only):
 ${transcriptFor(session)}`;
 }
 
-export function debatePrompt({ session, agentLabel, role, opponentLabel, round, totalRounds, userTask, independent, projectSnapshot = "", targetVersion = 1, itemRegistry = [], proposition = "" }) {
+export function debatePrompt({ session, agentLabel, role, opponentLabel, round, totalRounds, userTask, independent, projectSnapshot = "", targetVersion = 1, itemRegistry = [], proposition = "", confirmationRound = false }) {
   const tools = projectSnapshot
     ? `You can READ the attached project (Read/Grep/Glob) to ground your argument in the real code — read only, never edit or run anything. When you cite the code, name the file (and the line when you can), and keep what you verified separate from what you're inferring.`
     : `Argue from what's in front of you — don't reach for tools, edit files, or run commands.`;
   const guidance = independent
     ? `This is your opening. Form your own position from the task and the earlier context — don't shadow how your opponent framed theirs. Make the real case: where you stand and why, your strongest arguments, what you'll honestly concede, where the other side falls short, what evidence or test would actually change your mind, the call you'd make, and how confident you are (0–100). Argue it like you mean it, in your own voice — not as a checklist.`
     : `This is a rebuttal, so go straight at the strongest opposing point on the table — don't re-argue your whole case. In a few sharp, honest lines: what you now concede from their last turn, your best specific challenge to it, anything genuinely new you're bringing this round, what's still unsettled between you, and your updated confidence (0–100).`;
-  const control = !independent ? `\n${controlInstruction(targetVersion, itemRegistry)}\n` : "";
+  const control = !independent ? `\n${controlInstruction(targetVersion, itemRegistry, confirmationRound)}\n` : "";
   // When the debate was opened on an existing discussion, the subject is the answer already on
   // the table — the user's message ("let's debate this") is only the trigger. Anchor to it
   // explicitly so the context isn't lost and the agents don't debate the switch itself. If the

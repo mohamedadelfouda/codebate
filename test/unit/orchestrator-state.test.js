@@ -522,6 +522,53 @@ test("2026-07-18 regression: omitted approved items are repaired before the fina
   }
 });
 
+test("a converged round with a late change makes the next round a confirmation round, then stops", async (t) => {
+  const session = await createSession("confirmation-round-wiring");
+  const claudePrompts = [];
+  const codexPrompts = [];
+  // Round 2 converges but Claude marks a late substantive change; because agents run in parallel on one
+  // snapshot, Codex hasn't seen it, so the engine flags awaitingConfirmation. Round 3 must therefore get
+  // the tightened "CONFIRMATION ROUND" prompt (read from the prior round's flag, not the current one),
+  // and — since nobody changes anything further — the session stops at round 3, not at the max of 5.
+  t.mock.method(provider("claude"), "run", async ({ prompt }) => {
+    claudePrompts.push(prompt);
+    if (claudePrompts.length === 1) return providerResult("Claude opening");
+    if (claudePrompts.length === 2) return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [], substantiveDelta: true }));
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [], targetVersion: 2 }));
+  });
+  t.mock.method(provider("codex"), "run", async ({ prompt }) => {
+    codexPrompts.push(prompt);
+    if (codexPrompts.length === 1) return providerResult("Codex opening");
+    if (codexPrompts.length === 2) return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [] }));
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [], targetVersion: 2 }));
+  });
+
+  try {
+    await runOrchestration(session.id, {
+      mode: "collaboration",
+      rounds: 5,
+      content: "Confirm the shared decision",
+      finalizer: "none",
+      agents: {
+        claude: { enabled: true, role: "Collaborator" },
+        codex: { enabled: true, role: "Collaborator" },
+      },
+    }, () => {});
+
+    // Round 2 (2nd call) is an ordinary later round; round 3 (3rd call) is the confirmation round.
+    assert.doesNotMatch(claudePrompts[1], /CONFIRMATION ROUND/);
+    assert.match(claudePrompts[2], /CONFIRMATION ROUND/);
+    assert.match(codexPrompts[2], /CONFIRMATION ROUND/);
+    const saved = await getSession(session.id);
+    const outcome = saved.messages.find((message) => message.meta?.outcome)?.meta.outcome;
+    assert.equal(outcome.completedRounds, 3);
+    assert.equal(outcome.stoppedEarly, true);
+    assert.equal(saved.messages.some((message) => message.round === 4), false);
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
 test("a stale target version gets one narrow repair", async (t) => {
   const session = await createSession("target-version-repair");
   let claudeCalls = 0;

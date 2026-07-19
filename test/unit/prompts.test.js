@@ -54,6 +54,17 @@ test("later collaboration rounds request a versioned control contract", () => {
   assert.match(prompt, /do not create a new item/i);
 });
 
+test("a confirmation round adds a tightened instruction only when flagged", () => {
+  const normal = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  assert.doesNotMatch(normal, /CONFIRMATION ROUND/);
+
+  const confirming = collaborationPrompt({ ...base, round: 3, targetVersion: 2, confirmationRound: true });
+  assert.match(confirming, /CONFIRMATION ROUND/);
+  assert.match(confirming, /do not add optional improvements/i);
+  assert.match(confirming, /substantiveDelta=false/);
+  assertControlContract(confirming, 2); // still a valid control contract
+});
+
 test("control repair requests one control block without a second reader-facing answer", () => {
   const prompt = controlRepairPrompt({
     agentLabel: "Claude",

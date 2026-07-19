@@ -524,6 +524,12 @@ function discussionState(validation) {
   // longer a gate, so an agreed answer that still needs the user or an outside check stops here.
   const agentWorkPending = pendingItems.some((pendingItem) => pendingItem.requiredStep.action === "resume_agent_round");
   const canStop = roundValid && !proposalChanged && agreementState === "converged" && !agentWorkPending;
+  // Agreement is reached, but a participant made a late substantive change THIS round. Agents run in
+  // parallel on one shared snapshot, so the others haven't seen it yet — the round correctly can't stop.
+  // This flags "the next round is a confirmation round": the orchestrator gives it a tightened prompt so
+  // participants only re-open on a genuine decision change, instead of drifting into marginal re-tweaks
+  // that keep proposalChanged=true and never converge. Mutually exclusive with canStop by construction.
+  const awaitingConfirmation = roundValid && agreementState === "converged" && proposalChanged && !agentWorkPending;
   // Reason still follows the aggregate completion state — needs_user and blocked already imply
   // their matching official item through the round consistency rules, so this stays faithful to
   // what the agents reported. The new case this enables, an agreed-but-incomplete stop, reports
@@ -533,12 +539,13 @@ function discussionState(validation) {
     : !canStop
       ? null
       : { satisfied: "complete", needs_user: "user_decision", blocked: "external_block", incomplete: "complete" }[completionState];
-  return { canStop, agreementState, completionState, stopReason, approvedRegistry, pendingItems, unclassifiedPoints, disagreements, proposedDisagreements, proposalChanged };
+  return { canStop, awaitingConfirmation, agreementState, completionState, stopReason, approvedRegistry, pendingItems, unclassifiedPoints, disagreements, proposedDisagreements, proposalChanged };
 }
 
 function assessmentPayload(validation, state) {
   return {
     canStop: state.canStop,
+    awaitingConfirmation: state.awaitingConfirmation,
     agreementState: state.agreementState,
     completionState: state.completionState,
     stopReason: state.stopReason,

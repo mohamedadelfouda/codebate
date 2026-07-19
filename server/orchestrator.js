@@ -847,6 +847,10 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         }
         const snapshot = structuredClone(session);
         const targetVersion = proposalVersion;
+        // The previous round reached agreement but carried a late change others hadn't seen, so this
+        // round is a confirmation round: a tightened prompt asks agents to only re-open on a genuine
+        // decision change, so it stops here instead of drifting into marginal re-tweaks.
+        const confirmationRound = lastAssessment?.awaitingConfirmation === true;
         const roundMessages = await runParallel(selected.map((agent) => () => {
           const prompt = collaborationPrompt({
             session: snapshot,
@@ -858,6 +862,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             projectSnapshot: projSnapshot,
             targetVersion,
             itemRegistry,
+            confirmationRound,
           });
           return callAgent(agent, prompt, round, "collaboration");
         }), state);
@@ -896,6 +901,9 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       for (let round = 2; round <= rounds; round += 1) {
         const snapshot = structuredClone(session);
         const targetVersion = proposalVersion;
+        // Confirmation round (see the collaboration loop): the previous round converged but carried a late
+        // change the others hadn't seen, so this round gets the tightened confirm-only prompt.
+        const confirmationRound = lastAssessment?.awaitingConfirmation === true;
         const roundMsgs = await runParallel(selected.map((agent) => () => {
           const opponent = selected.find((key) => key !== agent);
           const prompt = debatePrompt({
@@ -911,6 +919,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             targetVersion,
             itemRegistry,
             proposition,
+            confirmationRound,
           });
           return callAgent(agent, prompt, round, "rebuttal");
         }), state);

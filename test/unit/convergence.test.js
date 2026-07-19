@@ -120,6 +120,21 @@ test("a complete aligned round stops with an empty official registry", () => {
   assert.deepEqual(result.itemRegistry, []);
 });
 
+test("awaitingConfirmation gates one confirmation round when a converged round carried a late change", () => {
+  // Agents run in parallel on one shared snapshot: a substantive change made this round isn't visible to
+  // the others yet, so the round can't stop — but the NEXT round is an explicit confirmation round
+  // (tightened prompt) instead of an endless drift of marginal re-tweaks. canStop and
+  // awaitingConfirmation are mutually exclusive by construction.
+  const settled = assessRound([control(), control()], 2);
+  assert.equal(settled.canStop, true);
+  assert.equal(settled.awaitingConfirmation, false);
+
+  const lateChange = assessRound([control(), control({ substantiveDelta: true })], 2);
+  assert.equal(lateChange.canStop, false);
+  assert.equal(lateChange.awaitingConfirmation, true);
+  assert.equal(lateChange.agreementState, "converged");
+});
+
 test("a user decision stops discussion and produces one derived next step", () => {
   const result = assessRound([
     control({ goalStatus: "needs_user", itemProposals: [create("user_decision", "Choose the rollout mode", "user", "provide_decision")] }),
