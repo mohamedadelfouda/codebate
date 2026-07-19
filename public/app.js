@@ -1394,6 +1394,7 @@ function handleEvent(event) {
   if (event.type === "agent_start") { const s = `${phaseLabel(event.phase)} · ${t("roundWord")} ${formatLocaleNumber(lang, event.round)}`; liveAgents[event.agent] = s; renderLiveStrip(); setAgentState(event.agent, s, "running"); }
   if (event.type === "agent_activity" && event.event) { const s = humanizeActivity(event.event); if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); } setAgentState(event.agent, s, "running"); }
   if (event.type === "agent_complete") { delete streamingText[event.agent]; liveAgents[event.agent] = t("replied"); renderLiveStrip(); setAgentState(event.agent, t("replied"), "done"); }
+  if (event.type === "agent_dropped") { delete streamingText[event.agent]; delete liveAgents[event.agent]; renderLiveStrip(); setAgentState(event.agent, t("agentDropped"), ""); }
   if (event.type === "agent_delta") {
     streamingText[event.agent] = event.text;
     const s = t("agentWriting");

@@ -18,11 +18,14 @@ function boundedExcerpt(text, max) {
 
 // How much of the running transcript to hand each agent. Big on purpose: modern model windows hold far more
 // than the old 24k, and aggressively trimming the discussion is exactly what made a follow-up ("modify the
-// plan") lose the plan. One tunable constant — a smaller-window provider can lower it, and the pins below
-// (original task + latest agreed outcome) survive any trim regardless.
+// plan") lose the plan. One tunable constant — a smaller-window provider lowers it via contextBudgetChars in
+// the provider registry, and the pins below (original task + current proposals + latest outcome) survive any
+// trim regardless.
 const TRANSCRIPT_BUDGET_CHARS = 200000;
 export function transcriptFor(session, maxChars = TRANSCRIPT_BUDGET_CHARS) {
-  const msgs = session.messages ?? [];
+  // Aborted turns (a provider that failed mid-answer) are kept in the session for the reader, but never fed
+  // back to the agents — a surviving agent must not reason from an explicitly incomplete, dropped response.
+  const msgs = (session.messages ?? []).filter((message) => message.meta?.status !== "partial");
   const SEP = "\n\n---\n\n";
   const TRIM = "[Older context was trimmed by the local orchestrator.]";
   const cap = Math.max(maxChars, TRIM.length + SEP.length + 40);
@@ -59,21 +62,32 @@ export function transcriptFor(session, maxChars = TRANSCRIPT_BUDGET_CHARS) {
   }
   if (!overflow) return full.join(SEP);
 
-  // The transcript overflowed even the budget — so smart-compact instead of a blind trim. NEVER drop the two
-  // things a follow-up depends on: the ORIGINAL task (the first user turn — the plan/subject the whole session
-  // is about) and the latest official outcome (the agreed findings/decision so far). Pin both, then fill the
-  // rest from the most recent tail. CRITICAL: everything is emitted in CHRONOLOGICAL order with a trim marker
-  // at each elided gap, so an earlier turn never reads as if it came after a later one (an out-of-order outcome
-  // would make the agreement look like it preceded the discussion that produced it). This is why a "modify the
-  // plan" turn keeps the plan AND the accumulated agreement instead of re-discovering — or drifting from — them.
+  // Overflow: smart-compact instead of a blind trim. Pin the turns a follow-up depends on, fill the rest from
+  // the newest tail, then emit everything in CHRONOLOGICAL order with a trim marker at each elided gap (so an
+  // earlier turn never reads as if it came after a later one). Pins, in priority order:
+  //   • the ORIGINAL task (first user turn) — the subject the whole session is about;
+  //   • the NEWEST turn — continuity for the next round;
+  //   • the latest official outcome (the agreed state so far);
+  //   • the CURRENT run's round-1 agent turns — in a delta-only discussion the full proposal/plan lives ONLY
+  //     here (later rounds are deltas, and the outcome record is status, not the plan), so a "modify the plan"
+  //     follow-up needs them. This is why the plan survives even a finalizer-less collaboration.
   const firstUserIdx = msgs.findIndex((message) => message.author === "user");
+  let lastUserIdx = -1;
+  for (let i = msgs.length - 1; i >= 0; i -= 1) { if (msgs[i].author === "user") { lastUserIdx = i; break; } }
   let latestOutcomeIdx = -1;
   for (let i = msgs.length - 1; i >= 0; i -= 1) { if (msgs[i].meta?.outcome) { latestOutcomeIdx = i; break; } }
+  const proposalIdx = [];
+  for (let i = lastUserIdx + 1; i < msgs.length; i += 1) {
+    if (msgs[i].author === "agent" && msgs[i].round === 1) proposalIdx.push(i);
+  }
+  const pins = [...new Set([firstUserIdx, msgs.length - 1, latestOutcomeIdx, ...proposalIdx].filter((index) => index >= 0))];
 
-  // Reserve one trim marker so the honest "…trimmed" signal always survives even at a tiny budget; extra gap
-  // markers (there are at most a couple — a few pins plus one contiguous tail run) are covered by the final
-  // slice backstop. Render each kept message exactly once, caching by index.
-  const budget = Math.max(0, cap - TRIM.length - SEP.length);
+  // Reserve room for EVERY gap marker up front, so the chronological join can never overflow `cap` and force
+  // the final slice to cut content off the end — which would drop the NEWEST turn (rendered last). Gaps are
+  // bounded by the pinned islands: each pin, plus the head, can open at most one gap, so `pins.length + 2`
+  // markers is a safe upper bound. Render each kept message exactly once, caching by index.
+  const markerCost = TRIM.length + SEP.length;
+  const budget = Math.max(0, cap - (pins.length + 2) * markerCost);
   const kept = new Map();
   let used = 0;
   const keep = (index) => {
@@ -84,14 +98,12 @@ export function transcriptFor(session, maxChars = TRANSCRIPT_BUDGET_CHARS) {
     kept.set(index, block.text);
     used += block.text.length + SEP.length;
   };
-  // Pins first, so the task and the agreed outcome always win the budget...
-  keep(firstUserIdx);
-  keep(latestOutcomeIdx);
-  // ...then the most recent tail, newest-first, until the budget is spent.
+  // Pins first (priority order above), then fill the rest of the tail newest-first until the budget is spent.
+  for (const index of pins) keep(index);
   for (let i = msgs.length - 1; i >= 0 && used < budget; i -= 1) keep(i);
 
-  // Emit in chronological order, dropping a single trim marker wherever a run of messages was elided
-  // (before the first kept turn, between non-adjacent kept turns, and after the last kept turn).
+  // Emit in chronological order, dropping a trim marker wherever a run of messages was elided (before the
+  // first kept turn, between non-adjacent kept turns, and after the last kept turn).
   const order = [...kept.keys()].sort((a, b) => a - b);
   const parts = [];
   let prev = -1;

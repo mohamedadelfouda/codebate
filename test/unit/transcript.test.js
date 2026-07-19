@@ -90,6 +90,43 @@ test("transcriptFor renders a compacted transcript in chronological order", () =
   assert.ok(out.length <= 2000, `expected <= 2000, got ${out.length}`);
 });
 
+test("transcriptFor preserves the round-1 proposal in a finalizer-less collaboration", () => {
+  // Codex review (PR #4): with no finalizer, the full plan exists ONLY in the round-1 agent turns (later rounds
+  // are delta-only, and the outcome record carries status, not the plan). A follow-up must still see the plan.
+  const msgs = [
+    { author: "user", content: "TASK design a radar", phase: "user" },
+    { author: "agent", agent: "claude", content: "FULL_PROPOSAL_PLAN " + "p".repeat(1200), phase: "collaboration", round: 1 },
+    { author: "agent", agent: "codex", content: "FULL_PROPOSAL_CODEX " + "q".repeat(1200), phase: "collaboration", round: 1 },
+  ];
+  for (let i = 2; i <= 30; i += 1) {
+    msgs.push({ author: "agent", agent: "claude", content: `DELTA_R${i} ` + "d".repeat(400), phase: "collaboration", round: i });
+  }
+  const out = transcriptFor(session(msgs), 5000);
+  // Both round-1 full proposals survive even though they sit near the head and the tail is long.
+  assert.match(out, /FULL_PROPOSAL_PLAN/);
+  assert.match(out, /FULL_PROPOSAL_CODEX/);
+  assert.match(out, /TASK design a radar/);
+  assert.match(out, /trimmed|truncated/i);
+});
+
+test("transcriptFor never slices the newest turn off the end, even across multiple gaps", () => {
+  // Codex review (PR #4): with the task, a mid-session outcome, and a recent tail separated by 2+ gaps, every
+  // trim marker must be budgeted so the final slice can't cut the newest turn. Force several distinct islands.
+  const msgs = [
+    { author: "system", content: "PRELUDE " + "z".repeat(300), phase: "system" },
+    { author: "user", content: "TASK_HEAD " + "t".repeat(1200), phase: "user" },
+    { author: "agent", agent: "claude", content: "PROPOSAL " + "p".repeat(1200), phase: "collaboration", round: 1 },
+    { author: "agent", agent: "codex", content: "MID_FILLER " + "m".repeat(1200), phase: "collaboration", round: 2 },
+    { author: "system", content: "OUTCOME agreed", phase: "decision", meta: { outcome: { agreementState: "converged" } } },
+    { author: "agent", agent: "claude", content: "MORE_FILLER " + "f".repeat(1200), phase: "collaboration", round: 3 },
+    { author: "agent", agent: "codex", content: "THE_NEWEST_TURN_MUST_SURVIVE", phase: "collaboration", round: 4 },
+  ];
+  const out = transcriptFor(session(msgs), 3500);
+  assert.match(out, /THE_NEWEST_TURN_MUST_SURVIVE/);
+  assert.match(out, /TASK_HEAD/);
+  assert.ok(out.length <= 3500, `expected <= 3500, got ${out.length}`);
+});
+
 test("transcriptFor honours its ceiling even at a tiny budget", () => {
   const msgs = [
     { author: "user", content: "u".repeat(500), phase: "user" },

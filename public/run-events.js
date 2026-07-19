@@ -3,6 +3,7 @@ const RUN_EVENT_TYPES = new Set([
   "agent_start",
   "agent_activity",
   "agent_complete",
+  "agent_dropped",
   "run_complete",
   "run_error",
   "run_stopped",
