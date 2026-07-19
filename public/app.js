@@ -61,6 +61,20 @@ const ATTACH_MAX_TOTAL_BYTES = 300 * 1024;
 // Command/Effort element, so saveSettings/loadSettings must keep their `if (!$(id)) continue` guards.
 const settingsIds = () => ["rounds", "finalizer", ...providers.flatMap((item) => ["Command", "Model", "Effort", "Role", "Enabled"].map((suffix) => `${item.id}${suffix}`))];
 const providerInfo = (id) => providers.find((item) => item.id === id) || { id, label: id || "Agent" };
+// A distinct mark per provider, drawn in the provider's brand colour (currentColor), so Claude, Codex and
+// Cursor — whose labels all start with "C" — are told apart at a glance instead of every avatar showing the
+// letter "C". Authored inline SVG (never user data), so it's safe to inject; unknown providers fall back to
+// their first letter.
+const PROVIDER_GLYPHS = {
+  // Brand logos supplied by the user. Codex's shipped `<style>.a{fill:…}` + class="a" was replaced with a
+  // direct fill (a global `.a` rule would bleed onto the rest of the page); its gradient lives once in the
+  // #cdxGrad sprite in index.html (a per-avatar def went blank whenever its container was hidden). Cursor is
+  // monochrome (currentColor), so it takes the avatar's brand tint.
+  claude: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#D97757" fill-rule="nonzero" d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg>`,
+  codex: `<svg viewBox="0 0 250 250" aria-hidden="true"><path fill="url(#cdxGrad)" d="m84.3 5.1q3.7-1.5 7.7-2.6 3.9-1 7.9-1.6 4-0.5 8.1-0.6 4 0 8 0.5 20.7 2.4 37.1 17.7 0.1 0.1 0.4 0.3 0.1 0 0.2 0 0 0 0.2 0 0 0 0.1 0 0 0 0.1 0 5.2-1.4 10.7-1.9 5.4-0.4 10.7 0.1 5.5 0.4 10.7 1.9 5.2 1.3 10.1 3.6l0.6 0.4 1.6 0.8q5.2 2.5 9.7 6.1 4.7 3.4 8.6 7.7 3.8 4.3 6.9 9.2 3 4.8 5.2 10.2 4.3 10.5 4.3 22.1 0.2 2.1 0 4.2-0.1 2.2-0.2 4.3-0.3 2.1-0.7 4.3-0.4 2.1-0.9 4.1 0 0.2 0 0.4 0 0.2 0 0.5 0 0.1 0.1 0.4 0.1 0.1 0.3 0.3 12.3 12.6 16.3 30 6 29.7-12.2 53.5l-1.9 2.2q-3 3.5-6.5 6.4-3.4 3.1-7.3 5.5-3.8 2.4-8.1 4.2-4.1 1.9-8.5 3.2-0.3 0-0.4 0.2-0.3 0-0.4 0.1-0.1 0.1-0.3 0.4 0 0.1-0.1 0.3c-2.7 7.7-5.3 14.2-10.2 20.7-12.5 16.5-30.8 25.5-51.5 25.5q-24.6-0.1-43.6-18.1-0.2-0.1-0.4-0.2-0.2-0.1-0.4-0.1-0.2 0-0.3 0-0.3 0-0.4 0c-5.4 1.7-10.9 1.9-16.7 1.9q-3.5 0-7-0.5-3.4-0.4-6.9-1.2-3.3-0.8-6.6-2-3.3-1.2-6.4-2.8-3.3-1.6-6.4-3.6-3-2-5.8-4.3-3-2.3-5.5-5-2.5-2.6-4.6-5.6c-2.2-2.7-4.3-5.4-5.8-8.5q-0.8-1.6-1.6-3.2-0.6-1.7-1.3-3.3-0.7-1.7-1.2-3.4-0.5-1.6-1-3.4-1.1-4-1.6-7.9-0.6-4-0.6-8 0-4 0.6-8 0.4-4 1.4-8 0 0 0-0.1 0-0.1 0-0.1 0.2-0.2 0.2-0.3 0-0.1-0.2-0.1 0-0.2 0-0.3 0-0.1-0.1-0.1 0-0.2 0-0.2-0.1-0.1-0.1-0.1-2.4-2.5-4.6-5.2-2.1-2.7-4-5.4-1.7-3-3.2-6-1.5-3.1-2.6-6.3-0.8-2-1.3-4.1-0.7-2-1.1-4-0.4-2.1-0.7-4.2-0.2-2.2-0.4-4.3-0.2-2.8-0.1-5.6 0-2.8 0.3-5.4 0.1-2.8 0.6-5.6 0.4-2.8 1.1-5.5 7-23.1 26.9-36.3 4.3-2.9 8.2-4.5 4.5-1.9 9-3.2 0.2 0 0.3-0.1 0.1-0.2 0.3-0.3 0.1 0 0.1-0.3 0.1-0.1 0.1-0.2 1-3.1 2.2-6 1-2.9 2.5-5.7 1.5-3 3.2-5.6 1.7-2.7 3.7-5.1 2.5-3.2 5.3-5.9 3-2.8 6.1-5.4 3.2-2.4 6.8-4.4 3.5-2 7.2-3.5zm48.3 146.4c-2.3 0.1-4.4 1-6 2.8-1.5 1.6-2.4 3.7-2.4 5.9 0 2.3 0.9 4.4 2.4 6.2 1.6 1.6 3.7 2.5 6 2.6h50.4c2.4 0.1 4.8-0.6 6.5-2.4 1.7-1.6 2.8-4 2.8-6.4 0-2.4-1.1-4.7-2.8-6.3-1.7-1.8-4.1-2.6-6.5-2.4zm-56.7-64.9c-1.2-1.9-3-3.4-5.3-3.9-2.2-0.5-4.5-0.3-6.5 0.9-2 1.1-3.5 3-4.1 5.2-0.7 2.2-0.4 4.6 0.6 6.5l17.7 30.9-17.5 29.5c-1.2 2-1.6 4.5-1.1 6.8 0.7 2.3 2.1 4.1 4.1 5.3 2 1.2 4.4 1.6 6.7 0.9 2.2-0.5 4.2-1.9 5.4-3.9l20.1-34.1q0.7-0.9 0.9-2.1 0.3-1.1 0.3-2.3 0-1.2-0.3-2.2-0.2-1.2-0.8-2.2z"/></svg>`,
+  cursor: `<svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M22.106 5.68L12.5.135a.998.998 0 00-.998 0L1.893 5.68a.84.84 0 00-.419.726v11.186c0 .3.16.577.42.727l9.607 5.547a.999.999 0 00.998 0l9.608-5.547a.84.84 0 00.42-.727V6.407a.84.84 0 00-.42-.726zm-.603 1.176L12.228 22.92c-.063.108-.228.064-.228-.061V12.34a.59.59 0 00-.295-.51l-9.11-5.26c-.107-.062-.063-.228.062-.228h18.55c.264 0 .428.286.296.514z"/></svg>`,
+};
+const providerGlyph = (id, label) => PROVIDER_GLYPHS[id] || esc(String(label || id || "?").slice(0, 1));
 
 /* ---------------- i18n ---------------- */
 const t = (key) => STRINGS[lang][key];
@@ -301,7 +315,7 @@ async function loadProviderCatalog() {
     }).join("");
     card.setAttribute("aria-labelledby", titleId);
     card.innerHTML = [
-      `<div class="agent-head"><span class="agent-avatar ${esc(item.id)}" aria-hidden="true">${esc(item.label.slice(0, 1))}</span>`,
+      `<div class="agent-head"><span class="agent-avatar ${esc(item.id)}" aria-hidden="true">${providerGlyph(item.id, item.label)}</span>`,
       `<div class="agent-id"><h3 id="${esc(titleId)}">${esc(item.label)}</h3>${item.descriptorLaunch ? "" : `<span id="${esc(item.id)}Health" class="health" role="status" aria-live="polite" data-i18n="notChecked">${esc(t("notChecked"))}</span>`}</div>`,
       `<label class="switch" for="${esc(enabledId)}"><input id="${esc(enabledId)}" type="checkbox" ${item.defaultEnabled === false ? "" : "checked"} data-provider-toggle="${esc(item.id)}" aria-label="${esc(t("providerEnabled")(item.label))}"><span aria-hidden="true"></span></label></div>`,
       `<div class="agent-fields">${item.descriptorLaunch ? "" : `<div class="field"><label for="${esc(commandId)}" data-i18n="command">${esc(t("command"))}</label><div class="inline"><input id="${esc(commandId)}" value="${esc(item.command)}"><button class="btn-mini check-cli" data-agent="${esc(item.id)}" data-i18n="check" aria-label="${esc(t("checkProvider")(item.label))}">${esc(t("check"))}</button><button class="btn-mini setup-cli" data-agent="${esc(item.id)}" data-i18n="setupCli" aria-label="${esc(t("setupProviderCli")(item.label))}" aria-expanded="false" aria-controls="${esc(item.id)}CliSetup">${esc(t("setupCli"))}</button></div></div>`}`,
@@ -929,7 +943,7 @@ async function openSession(id) {
   connectorRequests.invalidate();
   currentSessionId = id;
   currentSession = null;
-  if (switching) currentRunId = null;
+  if (switching) { currentRunId = null; streamingText = {}; liveAgents = {}; }
   routeSuggestion = null;
   pendingExec = null;
   renderedMessageSessionId = null;
@@ -1069,7 +1083,7 @@ function renderMessages() {
       const ctx = meta.contextChars ? ` · ${esc(t("contextWord"))} ${bdi(formatLocaleNumber(lang, meta.contextChars))}` : "";
       const footer = metaParts.length ? `<div class="msg-meta">${metaParts.join(" · ")}${ctx}</div>` : "";
       el.innerHTML =
-        `<div class="msg-head"><span class="agent-avatar ${esc(info.id)}" aria-hidden="true">${esc(name.slice(0, 1))}</span>` +
+        `<div class="msg-head"><span class="agent-avatar ${esc(info.id)}" aria-hidden="true">${providerGlyph(info.id, name)}</span>` +
         `<span class="msg-name">${bdi(name)}</span>${badges}<span class="msg-time">${bdi(time)}</span></div>` +
         `<div class="msg-body"><div class="msg-content md">${renderMarkdown(msg.content)}</div>${footer}${techHtml}</div>`;
     } else if (msg.author === "user") {
@@ -1363,15 +1377,32 @@ function contentWithAttachments(base) {
 function autoGrow(el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 120) + "px"; }
 
 /* ---------------- SSE ---------------- */
+// Turn a raw provider activity event into a short, humane status. Adapters emit a `kind` plus a raw `text`
+// that can be a provider event type (e.g. "turn.started"); show the reader a friendly state keyed off `kind`
+// instead of that raw token, so provider event names and diagnostic noise never leak into the status line.
+function humanizeActivity(evt) {
+  switch (evt?.kind) {
+    case "thinking": return t("agentThinking");
+    case "delta": return t("agentWriting");
+    default: return t("agentWorking");
+  }
+}
 function handleEvent(event) {
   if (event.type === "session_updated") loadSession();
   if (!shouldHandleRunEvent(currentRunId, event)) return;
-  if (event.type === "run_started") { currentRunId = event.runId; liveAgents = {}; renderLiveStrip(); setRunning(true, `${discussionModeLabel(event.mode)} · ${formatLocaleNumber(lang, event.rounds)} ${t("roundsShort")}`); }
-  if (event.type === "agent_start") { const s = `${phaseLabel(event.phase)} · ${t("roundWord")} ${formatLocaleNumber(lang, event.round)}`; liveAgents[event.agent] = s; renderLiveStrip(); setAgentState(event.agent, s, "running"); $("liveStatus").textContent = t("working")(event.label); }
-  if (event.type === "agent_activity" && event.event?.text) { const s = event.event.text.slice(0, 90); if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); } setAgentState(event.agent, s, "running"); }
-  if (event.type === "agent_complete") { liveAgents[event.agent] = t("replied"); renderLiveStrip(); setAgentState(event.agent, t("replied"), "done"); }
+  if (event.type === "run_started") { currentRunId = event.runId; liveAgents = {}; streamingText = {}; renderLiveStrip(); setRunning(true, `${discussionModeLabel(event.mode)} · ${formatLocaleNumber(lang, event.rounds)} ${t("roundsShort")}`); }
+  if (event.type === "agent_start") { const s = `${phaseLabel(event.phase)} · ${t("roundWord")} ${formatLocaleNumber(lang, event.round)}`; liveAgents[event.agent] = s; renderLiveStrip(); setAgentState(event.agent, s, "running"); }
+  if (event.type === "agent_activity" && event.event) { const s = humanizeActivity(event.event); if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); } setAgentState(event.agent, s, "running"); }
+  if (event.type === "agent_complete") { delete streamingText[event.agent]; liveAgents[event.agent] = t("replied"); renderLiveStrip(); setAgentState(event.agent, t("replied"), "done"); }
+  if (event.type === "agent_delta") {
+    streamingText[event.agent] = event.text;
+    const s = t("agentWriting");
+    if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); }
+    setAgentState(event.agent, s, "running");
+    try { renderDecisionCards(); } catch { /* decision cards not mounted in this view */ }
+  }
   if (["run_complete","run_stopped","run_error"].includes(event.type)) {
-    liveAgents = {}; renderLiveStrip();
+    liveAgents = {}; streamingText = {}; renderLiveStrip();
     setRunning(false, event.type === "run_complete" ? t("runDone") : event.type === "run_stopped" ? t("runStopped") : localizedFailure({ code: event.code, detail: event.error }));
     currentRunId = null;
     loadSession(); refreshSessions();
@@ -2233,6 +2264,7 @@ const ROOM_PHASES = {
 const STAGE_KEYS = ["stagePlan", "stageCollab", "stageDecision", "stageExecute", "stageReview", "stageAccept"];
 const STAGE_INDEX = { plan: 0, collaboration: 1, decision: 2, execute: 3 };
 let liveAgents = {};
+let streamingText = {};
 
 const TERMINAL_EXEC = new Set(["merged", "pr_opened", "rejected", "blocked_secret"]);
 function pendingExecution() {
@@ -2344,9 +2376,14 @@ function renderDecisionCards() {
     card.className = `dcard ${esc(provider.id)}`;
     card.setAttribute("aria-labelledby", nameId);
     const badge = message ? phaseLabel(message.phase) : "";
-    const head = `<div class="dcard-head"><div class="dcard-id"><span class="agent-avatar ${esc(provider.id)}" aria-hidden="true">${esc(String(provider.label).slice(0, 1))}</span><strong id="${esc(nameId)}">${bdi(provider.label)}</strong></div>${badge ? `<span class="badge">${esc(badge)}</span>` : ""}</div>`;
+    const head = `<div class="dcard-head"><div class="dcard-id"><span class="agent-avatar ${esc(provider.id)}" aria-hidden="true">${providerGlyph(provider.id, provider.label)}</span><strong id="${esc(nameId)}">${bdi(provider.label)}</strong></div>${badge ? `<span class="badge">${esc(badge)}</span>` : ""}</div>`;
     let body;
-    if (message) {
+    const streaming = streamingText[provider.id];
+    if (streaming != null) {
+      // A1: the answer as it streams in (Claude), redacted + control-stripped server-side. A blinking caret
+      // marks it as still forming; agent_complete clears it and the stored final message takes over.
+      body = `<div class="dcard-body dcard-streaming"><p>${esc(streaming)}<span class="stream-caret" aria-hidden="true"></span></p></div>`;
+    } else if (message) {
       const meta = message.meta || {};
       const footParts = [
         meta.requestedModel ? bdi(meta.requestedModel, "ltr") : "",
@@ -2449,7 +2486,7 @@ function renderLiveStrip() {
   strip.hidden = false;
   strip.innerHTML = ids.map((id) => {
     const info = providerInfo(id);
-    return `<div class="live-actor"><span class="agent-avatar ${esc(info.id)}" aria-hidden="true">${esc(String(info.label).slice(0, 1))}</span><div><strong>${bdi(info.label)}</strong><span dir="auto">${esc(liveAgents[id])}</span></div></div>`;
+    return `<div class="live-actor"><span class="agent-avatar ${esc(info.id)}" aria-hidden="true">${providerGlyph(info.id, info.label)}</span><div><strong>${bdi(info.label)}</strong><span dir="auto">${esc(liveAgents[id])}</span></div></div>`;
   }).join("");
 }
 // Single re-render entry point, called from renderMessages() so it tracks every session/SSE update.

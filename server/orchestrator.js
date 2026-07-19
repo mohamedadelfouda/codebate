@@ -259,6 +259,20 @@ function makeMessage({ author, agent, role, content, round, phase, mode }) {
   };
 }
 
+// A bounded, safe preview of a still-forming answer for the live UI. It previews the HEAD, not the tail: the
+// <agent-control> block is emitted at the very end, so a bounded prefix is answer text, and sanitizing a
+// bounded prefix (not the whole 4MiB buffer) keeps each 100ms emit cheap. Because we sanitize BEFORE capping
+// and there is no earlier context, no secret or control-block fragment can straddle the cut — we drop any
+// complete block or unmatched opening tag, redact, THEN cap.
+const STREAM_PREVIEW_CHARS = 600;
+function streamingPreview(full) {
+  const head = String(full).slice(0, STREAM_PREVIEW_CHARS * 3);
+  const noComplete = stripAgentControl(head);
+  const openAt = noComplete.toLowerCase().indexOf("<agent-control>");
+  const clean = openAt === -1 ? noComplete : noComplete.slice(0, openAt);
+  return redact(clean).trimEnd().slice(0, STREAM_PREVIEW_CHARS);
+}
+
 // The most recent substantive agent answer already in the session. When the user flips an
 // existing discussion into debate with a message like "let's debate this", THAT answer is the
 // real subject — not the switch message. Returned verbatim (control blocks were already
@@ -745,6 +759,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       const contextMessages = session.messages.length;
       emit({ type: "agent_start", sessionId, runId: state.runId, agent, label: provider(agent).label, role, round, phase });
       const deltaBuffer = new CappedText();
+      let lastDeltaEmit = 0;
       let result;
       let providerPromise;
       try {
@@ -757,6 +772,14 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             if (!runAcceptsOutput(sessionId, state)) return;
             if (event.kind === "delta") {
               deltaBuffer.append(event.text);
+              // Stream the visible answer to the UI as it forms — throttled so a fast token stream can't flood
+              // SSE, and sent as a bounded, redacted, control-safe preview (see streamingPreview) so a long
+              // answer can't blow up the payload and no secret or machine block shows mid-flight.
+              const now = Date.now();
+              if (now - lastDeltaEmit >= 100) {
+                lastDeltaEmit = now;
+                emit({ type: "agent_delta", sessionId, runId: state.runId, agent, text: streamingPreview(deltaBuffer.toString()), round, phase });
+              }
             } else {
               const visibleEvent = event?.text ? { ...event, text: redact(event.text) } : event;
               emit({ type: "agent_activity", sessionId, runId: state.runId, agent, event: visibleEvent, round, phase });
