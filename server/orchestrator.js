@@ -401,24 +401,31 @@ function controlBlameLine(outcome) {
 function unfinishedOutcomeReport(outcome) {
   const round = outcome.completedRounds;
   if (outcome.stopReason === "invalid_control") {
+    // Proposed disagreements are extracted from every PRESENT valid control, so they can exist even when
+    // ANOTHER agent's control was malformed — surface them regardless, and never claim "no content
+    // disagreement" while real points are on the table.
+    const disagreementTail = outcome.proposedDisagreements.length
+      ? `\nنقط الاختلاف اللي طرحوها:\n${outcome.proposedDisagreements.map((point) => `• ${point}`).join("\n")}`
+      : "";
     // Case A — the controls PARSED but the round wasn't certified (a consistency/version conflict) and the
-    // agents raised real points. Another round can genuinely resolve this, so surface the points and it's fair
-    // to suggest more rounds here.
+    // agents raised real points. Another round can genuinely resolve this, so it's fair to suggest more rounds.
     if (outcome.controlsParseable && outcome.proposedDisagreements.length) {
-      return `انتهت ${round} جولات. الوكلاء طرحوا نقط اختلاف لكن الجولة ماتعتمدتش بسبب تعارض في بيانات التحكم — ارفع عدد الجولات أو وضّح المطلوب.\nنقط الاختلاف اللي طرحوها:\n${outcome.proposedDisagreements.map((point) => `• ${point}`).join("\n")}`;
+      return `انتهت ${round} جولات. الوكلاء طرحوا نقط اختلاف لكن الجولة ماتعتمدتش بسبب تعارض في بيانات التحكم — ارفع عدد الجولات أو وضّح المطلوب.${disagreementTail}`;
     }
-    // Case B — a control BLOCK was actually malformed (didn't parse / failed schema, even after a repair
-    // attempt). Name the blocker; raising rounds can't fix a bad control block, so never suggest it.
+    // Case B — a control BLOCK was actually malformed. Name the blocker; raising rounds can't fix a bad block.
+    // Only assert "not a content disagreement" when there genuinely are none.
     const blame = controlBlameLine(outcome);
     if (blame) {
-      return `النقاش اتقفل لسبب تقني بعد ${round} جولات: ${blame} — فالنظام ماقدرش يختم الاتفاق رسميًا. ده مش خلاف في المحتوى بين الوكلاء، وزيادة عدد الجولات مش هتحلّه.`;
+      const noDisagreement = disagreementTail ? "" : " ده مش خلاف في المحتوى بين الوكلاء،";
+      return `النقاش اتقفل لسبب تقني بعد ${round} جولات: ${blame} — فالنظام ماقدرش يختم الاتفاق رسميًا.${noDisagreement} وزيادة عدد الجولات مش هتحلّ العطل التقني ده.${disagreementTail}`;
     }
     // No per-agent blame recorded. Keep the reason accurate: valid JSON that hit a consistency conflict is a
     // different thing from control data that wasn't valid at all.
-    if (outcome.controlsParseable) {
-      return `انتهت ${round} جولات، لكن الجولة ماتعتمدتش رسميًا بسبب تعارض في بيانات التحكم — سبب تقني، مش خلاف في المحتوى.`;
-    }
-    return `انتهت ${round} جولات، لكن بيانات التحكم من الوكلاء ماكانتش صالحة فالاتفاق ماتختمش رسميًا — سبب تقني، مش خلاف في المحتوى.`;
+    const parseNote = outcome.controlsParseable
+      ? "الجولة ماتعتمدتش رسميًا بسبب تعارض في بيانات التحكم"
+      : "بيانات التحكم من الوكلاء ماكانتش صالحة فالاتفاق ماتختمش رسميًا";
+    const noDisagreement = disagreementTail ? "" : " مش خلاف في المحتوى.";
+    return `انتهت ${round} جولات، لكن ${parseNote} — سبب تقني.${noDisagreement}${disagreementTail}`;
   }
   if (outcome.agreementState === "converged" && outcome.completionState === "incomplete") {
     return `انتهت ${round} جولات. الوكلاء متفقون على الإجابة الحالية، بس لسه فيه شغل وكلاء إضافي ممكن يحسّنها — ارفع عدد الجولات لو عايز يكمّلوا.${pendingItemList(outcome)}`;

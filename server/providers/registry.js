@@ -67,13 +67,11 @@ const providers = new Map([
       projectTransport: "sandbox",
       connectors: false,
       executeModes: ["run"],
-      // A malformed control block from a discussion round is repaired by a follow-up call in READ-ONLY mode
-      // (controlRepairConfig forces permission:"read" → Codex read-only sandbox), asking only for corrected
-      // JSON — no tools, no writes. Previously "unsupported", which SKIPPED repair entirely, so a single
-      // shape slip from Codex failed the whole round (invalid_control) even when the content had converged.
-      // The repair path degrades gracefully if the provider can't return clean JSON (recorded + surfaced),
-      // so enabling it can only help — it never makes a round more invalid than a skip did.
-      controlRepair: "tool-free",
+      // Control Repair stays "unsupported": Codex read-only confines WRITES but still permits host-file READS
+      // (SECURITY.md — a scratch cwd is not a filesystem-read boundary), and the repair prompt embeds untrusted
+      // prior agent output that could steer a second Codex process into reading host data. So a malformed Codex
+      // control fails closed (repair_not_supported) and is surfaced honestly, never repaired by a launched call.
+      controlRepair: "unsupported",
     },
     discoverModels: discoverCodexModels,
     run: runCodex,
@@ -107,11 +105,10 @@ const providers = new Map([
     defaultModel: "",
     models: [],
     efforts: [],
-    // controlRepair "tool-free": a malformed control block is repaired by a read-only follow-up (plan mode,
-    // permission:"read") asking only for corrected JSON — no tools. Was undefined, which SKIPPED repair, so
-    // one shape slip from Cursor failed the round. Best-effort: degrades gracefully if Cursor can't return
-    // clean JSON, so it never makes a round more invalid than the previous skip did.
-    capabilities: { web: false, projectRead: true, projectTransport: "sandbox", connectors: false, executeModes: [], controlRepair: "tool-free" },
+    // No controlRepair mode: --mode plan confines writes but not READS, and on Windows the review runs
+    // unsandboxed with network reachable (SECURITY.md). So a malformed Cursor control fails closed
+    // (repair_not_supported) and is surfaced honestly — never repaired by a launched call.
+    capabilities: { web: false, projectRead: true, projectTransport: "sandbox", connectors: false, executeModes: [] },
     discoverModels: discoverCursorModels,
     run: runCursor,
   }],

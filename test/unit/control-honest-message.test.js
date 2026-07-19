@@ -63,3 +63,17 @@ test("invalid_control report still surfaces proposed disagreement points when pa
   assert.match(report, /getLatestPriceBatch/);
   assert.match(report, /نقط الاختلاف/);
 });
+
+test("invalid_control report surfaces a disagreement even when another control was malformed", () => {
+  // Codex review: a valid control can raise a disagreement while a DIFFERENT agent's control is malformed
+  // (controlsParseable=false for the round). The report must surface that point and never deny the disagreement.
+  const outcome = invalidControlOutcome({
+    controlsParseable: false,
+    proposedDisagreements: ["الاختيار المعماري: polling مقابل hook"],
+    roundDiagnostics: [{ round: 5, controlFailures: [{ agent: "codex", errorCodes: ["invalid_control_json"], repairStatus: "skipped" }] }],
+  });
+  const report = discussionOutcomeReport(outcome);
+  assert.match(report, /Codex/);                      // names the malformed blocker
+  assert.match(report, /polling مقابل hook/);         // surfaces the raised disagreement
+  assert.doesNotMatch(report, /مش خلاف في المحتوى/);  // does NOT falsely deny the disagreement
+});
