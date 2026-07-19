@@ -7,7 +7,7 @@ import { assertTrustedProject, projectSnapshot } from "./project.js";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { CappedText } from "./output-limits.js";
-import { logError, redact } from "./logger.js";
+import { logError, logWarn, redact } from "./logger.js";
 import { registerProjectScope } from "./project-tools.js";
 import { claimSessionActivity } from "./session-activity.js";
 import { expectedApiError } from "./api-errors.js";
@@ -288,7 +288,7 @@ function discussionOutcomePhase(assessment) {
   }[assessment.stopReason] || "needs_more_rounds";
 }
 
-export function buildDiscussionOutcome(assessment, requestedRounds, completedRounds, controlRepairStats = null) {
+export function buildDiscussionOutcome(assessment, requestedRounds, completedRounds, controlRepairStats = null, roundDiagnostics = []) {
   const phase = discussionOutcomePhase(assessment);
   return {
     outcomeVersion: 1,
@@ -311,6 +311,7 @@ export function buildDiscussionOutcome(assessment, requestedRounds, completedRou
     conflicts: structuredClone(assessment.conflicts),
     controlValid: assessment.allValid,
     controlsParseable: assessment.controlsParseable,
+    roundDiagnostics: structuredClone(roundDiagnostics),
     ...(controlRepairStats ? { controlRepairStats: structuredClone(controlRepairStats) } : {}),
   };
 }
@@ -434,24 +435,33 @@ async function settlePendingProviders(state, timeoutMs = 5000) {
   return completed;
 }
 
-async function runParallel(factories, state) {
-  let primaryError = null;
-  const tasks = factories.map(async (factory) => {
-    try {
-      return await factory();
-    } catch (error) {
-      if (!error.runInactive && requestRunFailure(state)) {
-        primaryError = error;
-        await terminateRunChildren(state);
-      }
-      throw error;
-    }
-  });
-  const outcomes = await Promise.allSettled(tasks);
+// Run one round of agents in parallel with single-provider fault tolerance. Unlike a fail-fast join, one
+// agent's failure no longer aborts the round: the siblings finish, then each failed agent is retried once
+// automatically (its failed partial is pruned first, so a successful retry leaves exactly one turn for that
+// agent/round). A user cancellation still aborts immediately; only a failure that survives the retry claims
+// the run failure and terminates any stragglers — the same terminal outcome as before, just reached after
+// the siblings had their turn instead of the instant the first agent fell over. Each unit is
+// { run: () => Promise<message>, prune?: () => void }.
+async function runResilientRound(units, state, autoRetries = 1) {
+  const providerFailure = (outcome) => outcome.status === "rejected" && !outcome.reason?.runInactive;
+  const outcomes = await Promise.allSettled(units.map((unit) => unit.run()));
   if (runWasCancelled(state)) throw runInactiveError(state);
-  if (primaryError) throw primaryError;
+  for (let pass = 0; pass < autoRetries; pass += 1) {
+    const failed = outcomes.map((outcome, i) => (providerFailure(outcome) ? i : -1)).filter((i) => i >= 0);
+    if (!failed.length) break;
+    // Claiming failure flips the run to "failing", which would reject the retry itself — so we never claim it
+    // until the retries are spent. Prune each failed attempt's partial before re-running so a success replaces
+    // it rather than sitting beside it.
+    await Promise.all(failed.map((i) => units[i].prune?.()));
+    const retried = await Promise.allSettled(failed.map((i) => units[i].run()));
+    if (runWasCancelled(state)) throw runInactiveError(state);
+    failed.forEach((i, k) => { outcomes[i] = retried[k]; });
+  }
   const rejected = outcomes.find((outcome) => outcome.status === "rejected");
-  if (rejected) throw rejected.reason;
+  if (rejected) {
+    if (!rejected.reason?.runInactive && requestRunFailure(state)) await terminateRunChildren(state);
+    throw rejected.reason;
+  }
   return outcomes.map((outcome) => outcome.value);
 }
 
@@ -757,10 +767,35 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         result = await providerPromise;
       } catch (error) {
         const safeError = redact(error?.message || String(error));
-        // Save any partial output, clearly labeled — never treat it as a final result.
         const partial = redact(String(error.partial || deltaBuffer.toString())).trim();
+        // If this turn expected a control block and the partial output already contains a complete, valid
+        // one, the agent finished its answer before the CLI failed (e.g. a post-completion timeout). A valid
+        // control is a stronger completion signal than the exit code, so recover the turn instead of erroring
+        // the whole session — record it completed_recovered with a provider warning, and let the round
+        // assessment proceed normally. Truncated output is never recovered (the control may be cut).
+        const expectsControl = round >= 2 && (phase === "collaboration" || phase === "rebuttal");
+        const recoveredControl = expectsControl && partial && !error.outputTruncated ? parseAgentControl(partial) : null;
+        if (recoveredControl?.valid && runAcceptsOutput(sessionId, state)) {
+          const recovered = makeMessage({ author: "agent", agent, role, content: stripAgentControl(partial), round, phase, mode });
+          recovered.control = recoveredControl;
+          recovered.convergence = recoveredControl;
+          recovered.meta = {
+            requestedModel: cfg.model || "(default)", requestedEffort: cfg.effort || "",
+            durationMs: error.durationMs ?? null, exitCode: error.exitCode ?? null, usage: error.usage ?? null,
+            status: "completed_recovered", providerWarning: safeError,
+            contextChars, contextMessages, retryCount: 0, outputTruncated: false,
+          };
+          session.messages.push(recovered);
+          if (!(await persistRunProgress(session, state, emit))) throw runInactiveError(state);
+          emit({ type: "agent_complete", sessionId, runId: state.runId, agent, message: recovered, providerSessionId: error.sessionId || null });
+          return recovered;
+        }
+        // Otherwise, save any partial output, clearly labeled — never treat it as a final result. Strip any
+        // <agent-control> block from a control-bearing turn's partial too: an unrecovered partial must never
+        // leak the machine block into the reader-facing content or the export.
         if (partial && runAcceptsOutput(sessionId, state)) {
-          const partialMsg = makeMessage({ author: "agent", agent, role, content: partial, round, phase, mode });
+          const partialContent = expectsControl ? stripAgentControl(partial) : partial;
+          const partialMsg = makeMessage({ author: "agent", agent, role, content: partialContent, round, phase, mode });
           partialMsg.meta = {
             requestedModel: cfg.model || "(default)", requestedEffort: cfg.effort || "",
             durationMs: error.durationMs ?? null, exitCode: error.exitCode ?? null,
@@ -802,16 +837,49 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       return message;
     };
 
+    // Drop a failed attempt's partial turn so a successful auto-retry (runResilientRound) leaves exactly one
+    // message for (agent, round) — the recovered answer — instead of a stale partial sitting next to it. The
+    // partial was already persisted and the store merge is union-by-id, so it has to be removed from the store
+    // too, or the retry's next persist merges it right back in.
+    const pruneFailedAttempt = async (agent, round) => {
+      const i = session.messages.findIndex(
+        (m) => m.author === "agent" && m.agent === agent && m.round === round && m.meta?.status === "partial",
+      );
+      if (i < 0) return;
+      const [removed] = session.messages.splice(i, 1);
+      await mutateSession(session.id, (latest) => {
+        const kept = (latest.messages || []).filter((m) => m.id !== removed.id);
+        if (kept.length === (latest.messages || []).length) return SKIP_SESSION_WRITE;
+        latest.messages = kept;
+        return true;
+      });
+    };
+
     let completedRounds = 0;
     let itemRegistry = [];
     let lastAssessment = null;
     let officialOutcome = null;
+    let finalizerFailed = null;
     let proposalVersion = 1;
+    // Per-round diagnostics: why each round continued (or stopped) and who changed the proposal. Recorded
+    // for every assessed round so a run is diagnosable from its outcome/export, not only the final state.
+    const roundDiagnostics = [];
+    const recordDiagnostic = (round, messages, assessment) => roundDiagnostics.push({
+      round,
+      agreementState: assessment.agreementState,
+      proposalChanged: assessment.proposalChanged,
+      awaitingConfirmation: assessment.awaitingConfirmation,
+      canStop: assessment.canStop,
+      continueReason: assessment.continueReason,
+      changedBy: messages.filter((message) => message.control?.substantiveDelta).map((message) => message.agent),
+      consistencyErrors: assessment.consistencyErrors,
+      warnings: assessment.warnings,
+    });
 
     if (mode === "chat") {
       // Simple chat: each agent answers the user independently, in parallel, one pass.
       const snapshot = structuredClone(session);
-      await runParallel(selected.map((agent) => () => {
+      await runResilientRound(selected.map((agent) => {
         const prompt = chatPrompt({
           session: snapshot,
           agentLabel: provider(agent).label,
@@ -824,13 +892,13 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           },
           projectSnapshot: projSnapshot,
         });
-        return callAgent(agent, prompt, 1, "chat");
+        return { run: () => callAgent(agent, prompt, 1, "chat"), prune: () => pruneFailedAttempt(agent, 1) };
       }), state);
     } else if (mode === "collaboration") {
       for (let round = 1; round <= rounds; round += 1) {
         if (round === 1) {
           const openingSession = structuredClone(session);
-          await runParallel(selected.map((agent) => () => {
+          await runResilientRound(selected.map((agent) => {
             const prompt = collaborationPrompt({
               session: openingSession,
               agentLabel: provider(agent).label,
@@ -840,14 +908,18 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
               userTask,
               projectSnapshot: projSnapshot,
             });
-            return callAgent(agent, prompt, round, "collaboration");
+            return { run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
           }), state);
           completedRounds = round;
           continue;
         }
         const snapshot = structuredClone(session);
         const targetVersion = proposalVersion;
-        const roundMessages = await runParallel(selected.map((agent) => () => {
+        // The previous round reached agreement but carried a late change others hadn't seen, so this
+        // round is a confirmation round: a tightened prompt asks agents to only re-open on a genuine
+        // decision change, so it stops here instead of drifting into marginal re-tweaks.
+        const confirmationRound = lastAssessment?.awaitingConfirmation === true;
+        const roundMessages = await runResilientRound(selected.map((agent) => {
           const prompt = collaborationPrompt({
             session: snapshot,
             agentLabel: provider(agent).label,
@@ -858,11 +930,13 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             projectSnapshot: projSnapshot,
             targetVersion,
             itemRegistry,
+            confirmationRound,
           });
-          return callAgent(agent, prompt, round, "collaboration");
+          return { run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry);
         lastAssessment = assessment;
+        recordDiagnostic(round, roundMessages, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
         if (assessment.proposalChanged) proposalVersion += 1;
@@ -875,7 +949,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       // last rebuttal, so fall back to the user's message as the proposition.
       const proposition = previousMode === "debate" ? "" : lastSubstantiveAnswer(session);
       const openingSession = structuredClone(session);
-      await runParallel(selected.map((agent) => () => {
+      await runResilientRound(selected.map((agent) => {
         const opponent = selected.find((key) => key !== agent);
         const prompt = debatePrompt({
           session: openingSession,
@@ -889,14 +963,17 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           projectSnapshot: projSnapshot,
           proposition,
         });
-        return callAgent(agent, prompt, 1, "opening");
+        return { run: () => callAgent(agent, prompt, 1, "opening"), prune: () => pruneFailedAttempt(agent, 1) };
       }), state);
       completedRounds = 1;
 
       for (let round = 2; round <= rounds; round += 1) {
         const snapshot = structuredClone(session);
         const targetVersion = proposalVersion;
-        const roundMsgs = await runParallel(selected.map((agent) => () => {
+        // Confirmation round (see the collaboration loop): the previous round converged but carried a late
+        // change the others hadn't seen, so this round gets the tightened confirm-only prompt.
+        const confirmationRound = lastAssessment?.awaitingConfirmation === true;
+        const roundMsgs = await runResilientRound(selected.map((agent) => {
           const opponent = selected.find((key) => key !== agent);
           const prompt = debatePrompt({
             session: snapshot,
@@ -911,11 +988,13 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             targetVersion,
             itemRegistry,
             proposition,
+            confirmationRound,
           });
-          return callAgent(agent, prompt, round, "rebuttal");
+          return { run: () => callAgent(agent, prompt, round, "rebuttal"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry);
         lastAssessment = assessment;
+        recordDiagnostic(round, roundMsgs, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
         if (assessment.proposalChanged) proposalVersion += 1;
@@ -930,6 +1009,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         rounds,
         completedRounds,
         completedControlRepairStats(controlRepairStats),
+        roundDiagnostics,
       );
       const outcomeMessage = makeMessage({
         author: "system",
@@ -952,7 +1032,26 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         projectSnapshot: projSnapshot,
         outcome: officialOutcome,
       });
-      await callAgent(finalizer, prompt, completedRounds + 1, "synthesis");
+      try {
+        await callAgent(finalizer, prompt, completedRounds + 1, "synthesis");
+      } catch (finalizerError) {
+        // The finalizer only EXPLAINS the already-persisted official outcome — it never decides it. So its
+        // failure must NOT turn a completed discussion into an errored session: record the failure and
+        // complete the run on the deterministic outcome (the source of truth). A genuine cancellation
+        // mid-finalizer still stops the run.
+        if (runWasCancelled(state)) throw finalizerError;
+        finalizerFailed = redact(finalizerError?.message || String(finalizerError));
+        logWarn("finalizer failed; completing on the official outcome", finalizerFailed);
+        const noteMessage = makeMessage({
+          author: "system",
+          content: "The final summary couldn't be generated, so the official outcome above stands.",
+          phase: "synthesis",
+          mode,
+        });
+        noteMessage.meta = { finalizerFailed: true, providerWarning: finalizerFailed };
+        session.messages.push(noteMessage);
+        await persistRunProgress(session, state, emit).catch(() => {});
+      }
     }
 
     const terminalStatus = runWasCancelled(state) ? "stopped" : "completed";

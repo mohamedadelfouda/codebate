@@ -46,6 +46,7 @@ import {
 } from "./provider-readiness.js";
 import { checkAllProviderUpdates } from "./update-check.js";
 import { diagnosticSnapshot, healthSnapshot } from "./diagnostics.js";
+import { sessionMarkdown } from "./session-export.js";
 
 // First-run detection resolves native executables before entering an attached project.
 // A path the user already trusted this run (via Trust & check) takes precedence, so
@@ -241,15 +242,6 @@ async function serveStatic(urlPath, res) {
   } catch {
     return false;
   }
-}
-
-function sessionMarkdown(session) {
-  const out = [`# ${session.title}`, "", `- Status: ${session.status}`, `- Mode: ${session.mode}`, `- Updated: ${session.updatedAt}`, "", "---", ""];
-  for (const message of session.messages ?? []) {
-    const who = message.author === "user" ? "User" : message.author === "system" ? "System" : `${provider(message.agent)?.label || message.agent || "Agent"}${message.role ? ` — ${message.role}` : ""}`;
-    out.push(`## ${who}`, "", message.content || "", "");
-  }
-  return out.join("\n");
 }
 
 const server = http.createServer(async (req, res) => {

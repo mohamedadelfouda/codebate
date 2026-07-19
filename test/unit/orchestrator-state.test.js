@@ -181,7 +181,9 @@ test("an inconsistent-but-parseable round reports the raised disagreement, not o
   assert.equal(assessment.allValid, false);
   assert.equal(assessment.controlsParseable, true);
   assert.equal(assessment.consistencyErrors.some((error) => error.code === "missing_user_decision"), true);
-  assert.equal(assessment.consistencyErrors.some((error) => error.code === "completion_registry_mismatch"), true);
+  // H4: the completion mismatch is now a normalization warning; the round is still invalid, but only from
+  // the real missing_user_decision error.
+  assert.equal(assessment.warnings.some((warning) => warning.code === "goal_status_normalized"), true);
   const outcome = buildDiscussionOutcome(assessment, 2, 2);
   assert.equal(outcome.stopReason, "invalid_control");
   assert.equal(outcome.controlsParseable, true);
@@ -522,6 +524,172 @@ test("2026-07-18 regression: omitted approved items are repaired before the fina
   }
 });
 
+test("a converged round with a late change makes the next round a confirmation round, then stops", async (t) => {
+  const session = await createSession("confirmation-round-wiring");
+  const claudePrompts = [];
+  const codexPrompts = [];
+  // Round 2 converges but Claude marks a late substantive change; because agents run in parallel on one
+  // snapshot, Codex hasn't seen it, so the engine flags awaitingConfirmation. Round 3 must therefore get
+  // the tightened "CONFIRMATION ROUND" prompt (read from the prior round's flag, not the current one),
+  // and — since nobody changes anything further — the session stops at round 3, not at the max of 5.
+  t.mock.method(provider("claude"), "run", async ({ prompt }) => {
+    claudePrompts.push(prompt);
+    if (claudePrompts.length === 1) return providerResult("Claude opening");
+    if (claudePrompts.length === 2) return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [], substantiveDelta: true }));
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [], targetVersion: 2 }));
+  });
+  t.mock.method(provider("codex"), "run", async ({ prompt }) => {
+    codexPrompts.push(prompt);
+    if (codexPrompts.length === 1) return providerResult("Codex opening");
+    if (codexPrompts.length === 2) return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [] }));
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [], targetVersion: 2 }));
+  });
+
+  try {
+    await runOrchestration(session.id, {
+      mode: "collaboration",
+      rounds: 5,
+      content: "Confirm the shared decision",
+      finalizer: "none",
+      agents: {
+        claude: { enabled: true, role: "Collaborator" },
+        codex: { enabled: true, role: "Collaborator" },
+      },
+    }, () => {});
+
+    // Round 2 (2nd call) is an ordinary later round; round 3 (3rd call) is the confirmation round.
+    assert.doesNotMatch(claudePrompts[1], /CONFIRMATION ROUND/);
+    assert.match(claudePrompts[2], /CONFIRMATION ROUND/);
+    assert.match(codexPrompts[2], /CONFIRMATION ROUND/);
+    const saved = await getSession(session.id);
+    const outcome = saved.messages.find((message) => message.meta?.outcome)?.meta.outcome;
+    assert.equal(outcome.completedRounds, 3);
+    assert.equal(outcome.stoppedEarly, true);
+    assert.equal(saved.messages.some((message) => message.round === 4), false);
+    // H2: per-round diagnostics record why each round continued and who changed the proposal.
+    assert.equal(outcome.roundDiagnostics.length, 2);
+    assert.deepEqual(outcome.roundDiagnostics.map((diagnostic) => diagnostic.continueReason), ["awaiting_confirmation", "stopped"]);
+    assert.deepEqual(outcome.roundDiagnostics[0].changedBy, ["claude"]);
+    assert.deepEqual(outcome.roundDiagnostics[1].changedBy, []);
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
+test("a turn that fails after producing a valid control is recovered, not errored (H5)", async (t) => {
+  const session = await createSession("timeout-recovery");
+  let claudeCalls = 0;
+  let codexCalls = 0;
+  t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls += 1;
+    if (claudeCalls === 1) return providerResult("Claude opening");
+    // Round 2: the CLI emits a full valid control, then the request times out (exit non-zero).
+    const error = new Error("request timed out");
+    error.partial = `Claude's recovered answer.\n${versionedControl({ goalStatus: "satisfied", itemProposals: [] })}`;
+    error.outputTruncated = false;
+    throw error;
+  });
+  t.mock.method(provider("codex"), "run", async () => {
+    codexCalls += 1;
+    if (codexCalls === 1) return providerResult("Codex opening");
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [] }));
+  });
+
+  try {
+    await runOrchestration(session.id, {
+      mode: "collaboration",
+      rounds: 2,
+      content: "Recover the timed-out turn",
+      finalizer: "none",
+      agents: { claude: { enabled: true, role: "Collaborator" }, codex: { enabled: true, role: "Collaborator" } },
+    }, () => {});
+
+    const saved = await getSession(session.id);
+    assert.equal(saved.status, "completed"); // NOT error
+    const recovered = saved.messages.find((message) => message.agent === "claude" && message.round === 2);
+    assert.equal(recovered.meta.status, "completed_recovered");
+    assert.match(recovered.meta.providerWarning, /timed out/);
+    assert.match(recovered.content, /recovered answer/);
+    assert.doesNotMatch(recovered.content, /agent-control/); // the control block is stripped from the answer
+    const outcome = saved.messages.find((message) => message.meta?.outcome)?.meta.outcome;
+    assert.equal(outcome.agreementState, "converged"); // the recovered turn assessed normally
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
+test("a finalizer failure completes the discussion instead of erroring it (H6)", async (t) => {
+  const session = await createSession("finalizer-isolation");
+  let claudeCalls = 0;
+  let codexCalls = 0;
+  t.mock.method(provider("claude"), "run", async ({ prompt }) => {
+    claudeCalls += 1;
+    if (/official outcome/i.test(prompt)) throw new Error("finalizer timed out"); // the synthesis/finalizer turn
+    if (claudeCalls === 1) return providerResult("Claude opening");
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [] }));
+  });
+  t.mock.method(provider("codex"), "run", async () => {
+    codexCalls += 1;
+    if (codexCalls === 1) return providerResult("Codex opening");
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [] }));
+  });
+
+  try {
+    await runOrchestration(session.id, {
+      mode: "collaboration",
+      rounds: 2,
+      content: "Finish and summarize",
+      finalizer: "claude",
+      agents: { claude: { enabled: true, role: "Collaborator" }, codex: { enabled: true, role: "Collaborator" } },
+    }, () => {});
+
+    const saved = await getSession(session.id);
+    assert.equal(saved.status, "completed"); // NOT error — the finalizer only explains the outcome
+    assert.ok(saved.messages.some((message) => message.meta?.outcome), "the deterministic outcome is preserved");
+    const note = saved.messages.find((message) => message.meta?.finalizerFailed);
+    assert.ok(note, "a finalizer-failure note is recorded");
+    assert.match(note.meta.providerWarning, /finalizer timed out/);
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
+test("an unrecovered partial strips the agent-control block from its content (H7)", async (t) => {
+  const session = await createSession("partial-strip");
+  let claudeCalls = 0;
+  let codexCalls = 0;
+  t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls += 1;
+    if (claudeCalls === 1) return providerResult("Claude opening");
+    // Round 2 fails with a partial that carries a COMPLETE but INVALID control — H5 won't recover it, so it
+    // lands on the partial path, which must still strip the machine block from the saved content.
+    const error = new Error("stream broke");
+    error.partial = `Claude's partial answer.\n<agent-control>{"broken": true}</agent-control>`;
+    error.outputTruncated = false;
+    throw error;
+  });
+  t.mock.method(provider("codex"), "run", async () => {
+    codexCalls += 1;
+    if (codexCalls === 1) return providerResult("Codex opening");
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [] }));
+  });
+
+  try {
+    await runOrchestration(session.id, {
+      mode: "collaboration", rounds: 2, content: "x", finalizer: "none",
+      agents: { claude: { enabled: true, role: "Collaborator" }, codex: { enabled: true, role: "Collaborator" } },
+    }, () => {});
+
+    const saved = await getSession(session.id);
+    const partialMsg = saved.messages.find((message) => message.agent === "claude" && message.meta?.status === "partial");
+    assert.ok(partialMsg, "the failed turn is saved as a partial");
+    assert.doesNotMatch(partialMsg.content, /<agent-control>/); // machine block stripped from the reader content
+    assert.match(partialMsg.content, /partial answer/);
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
 test("a stale target version gets one narrow repair", async (t) => {
   const session = await createSession("target-version-repair");
   let claudeCalls = 0;
@@ -689,6 +857,49 @@ test("truncated repair output is rejected without storing raw provider output", 
   }
 });
 
+test("a collaboration round heals a transient failure on retry and assesses the recovered control (H8)", async (t) => {
+  const session = await createSession("collab-auto-retry-heal");
+  let claudeCalls = 0;
+  let codexCalls = 0;
+
+  t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls += 1;
+    if (claudeCalls === 1) return providerResult("Claude opening thoughts."); // round 1 opening — no control
+    if (claudeCalls === 2) {
+      // Round 2's first attempt writes part of a rebuttal, then the CLI dies (a "partial" turn).
+      const error = new Error("transient blip mid-round");
+      error.partial = "half a rebuttal";
+      throw error;
+    }
+    return providerResult(`Claude, on retry, agrees.\n${controlBlock("satisfied", [])}`); // round 2 retry
+  });
+  t.mock.method(provider("codex"), "run", async () => {
+    codexCalls += 1;
+    if (codexCalls === 1) return providerResult("Codex opening thoughts.");
+    return providerResult(`Codex agrees.\n${controlBlock("satisfied", [])}`);
+  });
+
+  try {
+    await runOrchestration(session.id, { ...collaborationRequest("Cache strategy?"), rounds: 2 }, () => {});
+
+    const saved = await getSession(session.id);
+    assert.equal(claudeCalls, 3); // round-1 opening + round-2 failure + round-2 retry
+    assert.equal(saved.status, "completed");
+    // The failed attempt's partial is pruned, leaving exactly one round-2 Claude turn — the recovered answer.
+    assert.ok(!saved.messages.some((message) => message.meta?.status === "partial"));
+    const round2Claude = saved.messages.filter((message) => message.author === "agent" && message.agent === "claude" && message.round === 2);
+    assert.equal(round2Claude.length, 1);
+    assert.equal(round2Claude[0].meta?.status, "completed");
+    assert.match(round2Claude[0].content, /on retry, agrees/);
+    // The recovered turn's control fed the round assessment — the run converged on it rather than erroring.
+    const outcome = saved.messages.find((message) => message.meta?.outcome)?.meta.outcome;
+    assert.equal(outcome.agreementState, "converged");
+    assert.equal(outcome.completionState, "satisfied");
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
 test("a debate runs opening then rebuttal, converges early, and finalizes once", async (t) => {
   const session = await createSession("debate-convergence");
   let claudeCalls = 0;
@@ -781,13 +992,15 @@ test("orchestration request validation rejects unsupported or inconsistent confi
   }
 });
 
-test("2026-07-16 regression: provider failure stays terminal after a late sibling result", async (t) => {
+test("2026-07-16 regression: a failure that survives its auto-retry stays terminal, without discarding a finished sibling", async (t) => {
   const session = await createSession("provider-failure-race");
   const releaseCodex = deferred();
   const claudeFailed = deferred();
   const events = [];
+  let claudeCalls = 0;
 
   t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls += 1;
     claudeFailed.resolve();
     throw new Error("controlled provider failure");
   });
@@ -805,15 +1018,57 @@ test("2026-07-16 regression: provider failure stays terminal after a late siblin
     await drainSessionWrites(session.id);
 
     const saved = await getSession(session.id);
+    // Claude fails on the original attempt AND its one automatic retry, so the run is still terminal — and the
+    // terminal claim stays singular even though a sibling finished in between (the original race guard holds).
+    assert.equal(claudeCalls, 2);
     assert.equal(saved.status, "error");
     assert.equal(saved.activeRun.status, "error");
     assert.ok(saved.activeRun.endedAt);
-    assert.equal(saved.messages.some((message) => message.content === "late Codex response"), false);
     assert.equal(events.filter((event) => event.type === "run_error").length, 1);
-    assert.equal(events.some((event) => event.type === "agent_complete" && event.agent === "codex"), false);
     assertSingleRunIdentity(events);
+    // But one agent's terminal failure no longer throws away a sibling that already finished: Codex's answer
+    // (produced before the failure became terminal) is kept, not discarded as under the old fail-fast join.
+    assert.equal(saved.messages.some((message) => message.content === "late Codex response"), true);
+    assert.ok(events.some((event) => event.type === "agent_complete" && event.agent === "codex"));
   } finally {
     releaseCodex.resolve();
+    await cleanupSession(session.id);
+  }
+});
+
+test("a transient provider failure heals on the automatic retry, pruning the failed attempt's partial (H8)", async (t) => {
+  const session = await createSession("provider-auto-retry-heal");
+  const events = [];
+  let claudeCalls = 0;
+
+  t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls += 1;
+    if (claudeCalls === 1) {
+      // First attempt writes some output, then the CLI dies — callAgent saves that as a "partial" turn.
+      const error = new Error("transient blip after partial output");
+      error.partial = "half-written answer";
+      throw error;
+    }
+    return providerResult("Claude recovered on retry");
+  });
+  t.mock.method(provider("codex"), "run", async () => providerResult("Codex answer"));
+
+  try {
+    await runOrchestration(session.id, chatRequest("Heal a transient failure"), (event) => events.push(event));
+    await drainSessionWrites(session.id);
+
+    const saved = await getSession(session.id);
+    assert.equal(claudeCalls, 2); // failed once, retried once
+    assert.notEqual(saved.status, "error"); // the round completed despite the first-attempt failure
+    // Exactly one Claude turn survives — the retry's success — and the failed attempt's partial was pruned,
+    // so the reader never sees a stale half-answer sitting next to the recovered one.
+    const claudeTurns = saved.messages.filter((message) => message.author === "agent" && message.agent === "claude");
+    assert.equal(claudeTurns.length, 1);
+    assert.equal(claudeTurns[0].content, "Claude recovered on retry");
+    assert.equal(claudeTurns[0].meta?.status, "completed");
+    assert.ok(!saved.messages.some((message) => message.meta?.status === "partial"));
+    assert.ok(events.some((event) => event.type === "agent_complete" && event.agent === "claude"));
+  } finally {
     await cleanupSession(session.id);
   }
 });

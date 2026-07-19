@@ -426,19 +426,26 @@ function terminalItemErrors(controls, currentRegistry) {
 function roundConsistencyErrors({ controls, currentRegistry, pendingItems, applicationErrors, enabled }) {
   const errors = [...applicationErrors];
   errors.push(...terminalItemErrors(controls, currentRegistry));
-  if (!enabled) return errors;
+  const warnings = [];
+  if (!enabled) return { errors, warnings };
+  // A terminal claim (needs_user / blocked) with no backing official item is a real error — the claim has
+  // nothing to stand on.
   if (controls.some((control) => control.goalStatus === "needs_user") && !pendingItems.some((pendingItem) => pendingItem.kind === "user_decision")) {
     errors.push({ code: "missing_user_decision" });
   }
   if (controls.some((control) => control.goalStatus === "blocked") && !pendingItems.some((pendingItem) => pendingItem.kind === "external_validation")) {
     errors.push({ code: "missing_external_validation" });
   }
+  // The itemRegistry is the source of truth: completion is DERIVED from the official items
+  // (aggregateCompletion uses `required`). A declared goalStatus that disagrees is normalized to the
+  // registry and recorded as a warning — it no longer INVALIDATES the round (was completion_registry_mismatch,
+  // which wrongly killed a round whose registry was actually consistent).
   const declared = declaredCompletion(controls);
   const required = requiredStepCompletion(pendingItems);
   if (required !== "satisfied" && declared !== "incomplete" && declared !== required) {
-    errors.push({ code: "completion_registry_mismatch", declaredCompletion: declared, requiredCompletion: required });
+    warnings.push({ code: "goal_status_normalized", declaredCompletion: declared, derivedCompletion: required });
   }
-  return errors;
+  return { errors, warnings };
 }
 
 function repairTargets(controls, targetVersion, consistencyErrors) {
@@ -467,7 +474,7 @@ function validateRound(controls, targetVersion, itemRegistry) {
     ? applyProposals(present, currentRegistry)
     : { registry: currentRegistry || [], conflicts: [], errors: [] };
   const candidatePendingItems = application.registry.filter((registryItem) => registryItem.status === "open");
-  const consistencyErrors = roundConsistencyErrors({
+  const { errors: consistencyErrors, warnings: normalizationWarnings } = roundConsistencyErrors({
     controls: present,
     currentRegistry: currentRegistry || [],
     pendingItems: candidatePendingItems,
@@ -482,6 +489,7 @@ function validateRound(controls, targetVersion, itemRegistry) {
     currentRegistry: currentRegistry || [],
     application,
     consistencyErrors,
+    normalizationWarnings,
     repairTargets: repairTargets(controls, targetVersion, consistencyErrors),
     roundValid,
     controlsValid,
@@ -524,6 +532,20 @@ function discussionState(validation) {
   // longer a gate, so an agreed answer that still needs the user or an outside check stops here.
   const agentWorkPending = pendingItems.some((pendingItem) => pendingItem.requiredStep.action === "resume_agent_round");
   const canStop = roundValid && !proposalChanged && agreementState === "converged" && !agentWorkPending;
+  // Agreement is reached, but a participant made a late substantive change THIS round. Agents run in
+  // parallel on one shared snapshot, so the others haven't seen it yet — the round correctly can't stop.
+  // This flags "the next round is a confirmation round": the orchestrator gives it a tightened prompt so
+  // participants only re-open on a genuine decision change, instead of drifting into marginal re-tweaks
+  // that keep proposalChanged=true and never converge. Mutually exclusive with canStop by construction.
+  const awaitingConfirmation = roundValid && agreementState === "converged" && proposalChanged && !agentWorkPending;
+  // Why this round did (or didn't) end the session — recorded per round so a run can be diagnosed from
+  // its export instead of only the final assessment. Cases are exhaustive and ordered by precedence.
+  const continueReason = canStop ? "stopped"
+    : !roundValid ? (validation.consistencyErrors.length ? "consistency_error" : "invalid_control")
+    : awaitingConfirmation ? "awaiting_confirmation"
+    : agreementState !== "converged" ? "open_disagreement"
+    : agentWorkPending ? "agent_work_pending"
+    : "proposal_changed";
   // Reason still follows the aggregate completion state — needs_user and blocked already imply
   // their matching official item through the round consistency rules, so this stays faithful to
   // what the agents reported. The new case this enables, an agreed-but-incomplete stop, reports
@@ -533,12 +555,14 @@ function discussionState(validation) {
     : !canStop
       ? null
       : { satisfied: "complete", needs_user: "user_decision", blocked: "external_block", incomplete: "complete" }[completionState];
-  return { canStop, agreementState, completionState, stopReason, approvedRegistry, pendingItems, unclassifiedPoints, disagreements, proposedDisagreements, proposalChanged };
+  return { canStop, awaitingConfirmation, continueReason, agreementState, completionState, stopReason, approvedRegistry, pendingItems, unclassifiedPoints, disagreements, proposedDisagreements, proposalChanged };
 }
 
 function assessmentPayload(validation, state) {
   return {
     canStop: state.canStop,
+    awaitingConfirmation: state.awaitingConfirmation,
+    continueReason: state.continueReason,
     agreementState: state.agreementState,
     completionState: state.completionState,
     stopReason: state.stopReason,
@@ -551,6 +575,7 @@ function assessmentPayload(validation, state) {
     unclassifiedPoints: state.unclassifiedPoints,
     conflicts: validation.application.conflicts,
     consistencyErrors: validation.consistencyErrors,
+    warnings: validation.normalizationWarnings,
     repairTargets: validation.repairTargets,
     proposalChanged: state.proposalChanged,
     versionAligned: validation.versionAligned,

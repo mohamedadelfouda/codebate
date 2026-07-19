@@ -54,6 +54,25 @@ test("later collaboration rounds request a versioned control contract", () => {
   assert.match(prompt, /do not create a new item/i);
 });
 
+test("a confirmation round adds a tightened instruction only when flagged", () => {
+  const normal = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  assert.doesNotMatch(normal, /CONFIRMATION ROUND/);
+
+  const confirming = collaborationPrompt({ ...base, round: 3, targetVersion: 2, confirmationRound: true });
+  assert.match(confirming, /CONFIRMATION ROUND/);
+  assert.match(confirming, /do not add optional improvements/i);
+  assert.match(confirming, /substantiveDelta=false/);
+  assertControlContract(confirming, 2); // still a valid control contract
+});
+
+test("the control instruction separates needs_user from post-answer next steps", () => {
+  const prompt = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  assert.match(prompt, /goalStatus reflects only whether you can complete THIS answer/);
+  assert.match(prompt, /needs_user \(with a user_decision item\) only when you genuinely cannot finish/);
+  assert.match(prompt, /recommending the user take next, that is goalStatus=satisfied/);
+  assert.match(prompt, /NOT as user_decision or external_validation items/);
+});
+
 test("control repair requests one control block without a second reader-facing answer", () => {
   const prompt = controlRepairPrompt({
     agentLabel: "Claude",
@@ -86,11 +105,38 @@ test("project grounding appears only when a snapshot is supplied", () => {
   assert.match(withProject, /PROJECT_TREE_SENTINEL/);
 });
 
+test("every phase forbids narrating tool usage or CLI errors in the reader-facing answer (H9)", () => {
+  const prompts = {
+    "collaboration opening": collaborationPrompt({ ...base, round: 1 }),
+    "collaboration round": collaborationPrompt({ ...base, round: 3, targetVersion: 2 }),
+    chat: chatPrompt({ ...base }),
+    "debate opening": debatePrompt({ ...base, opponentLabel: "Codex", round: 1, independent: true }),
+    "debate round": debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 2 }),
+    synthesis: synthesisPrompt({ ...base, mode: "debate" }),
+  };
+  for (const [label, prompt] of Object.entries(prompts)) {
+    assert.match(prompt, /never narrate tool calls, permission prompts, or CLI\/shell errors/, label);
+    assert.match(prompt, /the shell was rejected/, label);
+  }
+});
+
 test("debate opening is independent and has no convergence control", () => {
   const prompt = debatePrompt({ ...base, opponentLabel: "Codex", round: 1, independent: true });
   assert.match(prompt, /Codex/);
   assert.match(prompt, /design X/);
   assert.doesNotMatch(prompt, /<agent-control>/);
+});
+
+test("a debate confirmation round reaffirms agreement instead of rebutting", () => {
+  const rebuttal = debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 2 });
+  assert.match(rebuttal, /go straight at the strongest opposing point/);
+  assert.doesNotMatch(rebuttal, /CONFIRMATION ROUND/);
+
+  const confirming = debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 2, confirmationRound: true });
+  assert.match(confirming, /This is a confirmation round/);
+  assert.doesNotMatch(confirming, /go straight at the strongest opposing point/);
+  assert.match(confirming, /CONFIRMATION ROUND/); // the control instruction is tightened too
+  assertControlContract(confirming, 2);
 });
 
 test("debate rebuttal uses the same versioned control contract", () => {
