@@ -2,6 +2,11 @@ function clean(text) {
   return String(text ?? "").trim();
 }
 
+// Providers sometimes leak their own execution plumbing into the reader-facing answer — Cursor has written
+// lines like "The shell was rejected" straight into its reply. The answer is for the user, not a log of the
+// agent's tooling, so every phase forbids that narration.
+const ANSWER_HYGIENE = `Your reply is the answer itself, not a report on how you produced it: never narrate tool calls, permission prompts, or CLI/shell errors (for example "the shell was rejected" or "I don't have permission to run that"). If something you would have checked isn't available, work with what you have and, where it matters, state briefly what you couldn't verify.`;
+
 // Head+tail excerpt for text that may be huge (agent turns can reach several MB). Keeps the
 // start and end — enough to identify the answer — without ever blowing the prompt window.
 function boundedExcerpt(text, max) {
@@ -188,6 +193,7 @@ You're not competing. You're building one answer that's better than either of yo
 ${guidance}
 ${control}
 Reply in the same language the user last used. You don't literally share a session with the other model — the local orchestrator is handing you the shared transcript, so don't pretend otherwise. ${tools}
+${ANSWER_HYGIENE}
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
 What the user asked for [user-provided]:
 ${clean(userTask)}
@@ -210,6 +216,7 @@ Your assigned role: ${role || "Assistant"}.
 This is a normal chat: answer the user's latest message directly and helpfully in your own voice. ${web} ${project} Another agent is answering the same message separately — do not coordinate with, imitate, or wait for the other agent's answer.
 
 Answer in the same language as the user's latest message. Do not claim you directly share a provider-side session with another model; the local orchestrator is supplying the shared transcript. Do not modify files or run shell commands.
+${ANSWER_HYGIENE}
 
 Latest user message [user-provided]:
 ${clean(userTask)}
@@ -251,6 +258,7 @@ This is round ${round}, with room for up to ${totalRounds} — but the session c
 ${guidance}
 ${control}
 Reply in the same language the user last used. ${tools}
+${ANSWER_HYGIENE}
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
 ${subject}
 
@@ -286,6 +294,7 @@ Required response structure (translate every heading into the user's language):
 9. Next practical step
 
 Use the language of the user's latest message. ${tools}
+${ANSWER_HYGIENE}
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
 Original/current user task [user-provided]:
 ${clean(userTask)}

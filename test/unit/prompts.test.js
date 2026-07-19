@@ -105,6 +105,21 @@ test("project grounding appears only when a snapshot is supplied", () => {
   assert.match(withProject, /PROJECT_TREE_SENTINEL/);
 });
 
+test("every phase forbids narrating tool usage or CLI errors in the reader-facing answer (H9)", () => {
+  const prompts = {
+    "collaboration opening": collaborationPrompt({ ...base, round: 1 }),
+    "collaboration round": collaborationPrompt({ ...base, round: 3, targetVersion: 2 }),
+    chat: chatPrompt({ ...base }),
+    "debate opening": debatePrompt({ ...base, opponentLabel: "Codex", round: 1, independent: true }),
+    "debate round": debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 2 }),
+    synthesis: synthesisPrompt({ ...base, mode: "debate" }),
+  };
+  for (const [label, prompt] of Object.entries(prompts)) {
+    assert.match(prompt, /never narrate tool calls, permission prompts, or CLI\/shell errors/, label);
+    assert.match(prompt, /the shell was rejected/, label);
+  }
+});
+
 test("debate opening is independent and has no convergence control", () => {
   const prompt = debatePrompt({ ...base, opponentLabel: "Codex", round: 1, independent: true });
   assert.match(prompt, /Codex/);
