@@ -407,6 +407,57 @@ async function atomicWrite(filePath, data) {
   return runExclusive(filePath, () => doWrite(filePath, data));
 }
 
+// --- Trusted-project memory ---------------------------------------------------------------------------------
+// A project the user EXPLICITLY trusted once is remembered by its identity fingerprint, so re-attaching the
+// same project in a later session doesn't force the trust consent again. This REMEMBERS consent, it never
+// fabricates it: the fingerprint (realPath + git dir + remote) matches only the exact same project, a changed
+// identity/origin re-prompts, and assertTrustedProject still re-verifies the fingerprint at run time.
+const TRUSTED_PROJECTS_FILE = path.join(DATA_DIR, "trusted-projects.json");
+const MAX_TRUSTED_PROJECTS = 500;
+
+async function readTrustedProjects() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(TRUSTED_PROJECTS_FILE, "utf8"));
+    return Array.isArray(parsed?.projects)
+      ? parsed.projects.filter((entry) => entry && typeof entry.fingerprint === "string")
+      : [];
+  } catch { return []; } // absent or unreadable store → nothing is remembered (fail closed to re-consent)
+}
+
+// Read-modify-write under a single lock (keyed on the file), so a concurrent remember + forget can't
+// interleave and lose an update. readTrustedProjects itself takes no lock, so there's no nested-lock deadlock.
+async function mutateTrustedProjects(mutate) {
+  await ensureDirs();
+  return runExclusive(TRUSTED_PROJECTS_FILE, async () => {
+    const next = mutate(await readTrustedProjects());
+    await replaceJson(TRUSTED_PROJECTS_FILE, { version: 1, projects: next });
+    return next;
+  });
+}
+
+export async function isProjectTrusted(fingerprint) {
+  if (!fingerprint) return false;
+  return (await readTrustedProjects()).some((entry) => entry.fingerprint === fingerprint);
+}
+
+export async function listTrustedProjects() {
+  return readTrustedProjects();
+}
+
+export async function rememberTrustedProject(fingerprint, projectPath) {
+  if (!fingerprint) return;
+  await mutateTrustedProjects((current) => {
+    const others = current.filter((entry) => entry.fingerprint !== fingerprint);
+    // Newest last; bound the store, dropping the oldest first.
+    return [...others, { fingerprint, path: String(projectPath || ""), trustedAt: new Date().toISOString() }]
+      .slice(-MAX_TRUSTED_PROJECTS);
+  });
+}
+
+export async function forgetTrustedProject(fingerprint) {
+  return mutateTrustedProjects((current) => current.filter((entry) => entry.fingerprint !== fingerprint));
+}
+
 export async function listSessions() {
   await ensureDirs();
   const files = (await fs.readdir(SESSIONS_DIR)).filter((file) => file.endsWith(".json") && !file.endsWith(".summary.json"));
