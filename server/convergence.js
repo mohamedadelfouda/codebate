@@ -426,19 +426,26 @@ function terminalItemErrors(controls, currentRegistry) {
 function roundConsistencyErrors({ controls, currentRegistry, pendingItems, applicationErrors, enabled }) {
   const errors = [...applicationErrors];
   errors.push(...terminalItemErrors(controls, currentRegistry));
-  if (!enabled) return errors;
+  const warnings = [];
+  if (!enabled) return { errors, warnings };
+  // A terminal claim (needs_user / blocked) with no backing official item is a real error — the claim has
+  // nothing to stand on.
   if (controls.some((control) => control.goalStatus === "needs_user") && !pendingItems.some((pendingItem) => pendingItem.kind === "user_decision")) {
     errors.push({ code: "missing_user_decision" });
   }
   if (controls.some((control) => control.goalStatus === "blocked") && !pendingItems.some((pendingItem) => pendingItem.kind === "external_validation")) {
     errors.push({ code: "missing_external_validation" });
   }
+  // The itemRegistry is the source of truth: completion is DERIVED from the official items
+  // (aggregateCompletion uses `required`). A declared goalStatus that disagrees is normalized to the
+  // registry and recorded as a warning — it no longer INVALIDATES the round (was completion_registry_mismatch,
+  // which wrongly killed a round whose registry was actually consistent).
   const declared = declaredCompletion(controls);
   const required = requiredStepCompletion(pendingItems);
   if (required !== "satisfied" && declared !== "incomplete" && declared !== required) {
-    errors.push({ code: "completion_registry_mismatch", declaredCompletion: declared, requiredCompletion: required });
+    warnings.push({ code: "goal_status_normalized", declaredCompletion: declared, derivedCompletion: required });
   }
-  return errors;
+  return { errors, warnings };
 }
 
 function repairTargets(controls, targetVersion, consistencyErrors) {
@@ -467,7 +474,7 @@ function validateRound(controls, targetVersion, itemRegistry) {
     ? applyProposals(present, currentRegistry)
     : { registry: currentRegistry || [], conflicts: [], errors: [] };
   const candidatePendingItems = application.registry.filter((registryItem) => registryItem.status === "open");
-  const consistencyErrors = roundConsistencyErrors({
+  const { errors: consistencyErrors, warnings: normalizationWarnings } = roundConsistencyErrors({
     controls: present,
     currentRegistry: currentRegistry || [],
     pendingItems: candidatePendingItems,
@@ -482,6 +489,7 @@ function validateRound(controls, targetVersion, itemRegistry) {
     currentRegistry: currentRegistry || [],
     application,
     consistencyErrors,
+    normalizationWarnings,
     repairTargets: repairTargets(controls, targetVersion, consistencyErrors),
     roundValid,
     controlsValid,
@@ -567,6 +575,7 @@ function assessmentPayload(validation, state) {
     unclassifiedPoints: state.unclassifiedPoints,
     conflicts: validation.application.conflicts,
     consistencyErrors: validation.consistencyErrors,
+    warnings: validation.normalizationWarnings,
     repairTargets: validation.repairTargets,
     proposalChanged: state.proposalChanged,
     versionAligned: validation.versionAligned,

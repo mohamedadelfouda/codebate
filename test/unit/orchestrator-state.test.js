@@ -181,7 +181,9 @@ test("an inconsistent-but-parseable round reports the raised disagreement, not o
   assert.equal(assessment.allValid, false);
   assert.equal(assessment.controlsParseable, true);
   assert.equal(assessment.consistencyErrors.some((error) => error.code === "missing_user_decision"), true);
-  assert.equal(assessment.consistencyErrors.some((error) => error.code === "completion_registry_mismatch"), true);
+  // H4: the completion mismatch is now a normalization warning; the round is still invalid, but only from
+  // the real missing_user_decision error.
+  assert.equal(assessment.warnings.some((warning) => warning.code === "goal_status_normalized"), true);
   const outcome = buildDiscussionOutcome(assessment, 2, 2);
   assert.equal(outcome.stopReason, "invalid_control");
   assert.equal(outcome.controlsParseable, true);

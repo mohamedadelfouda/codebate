@@ -171,11 +171,17 @@ test("an external follow-up cannot be certified as satisfied", () => {
     control({ itemProposals: [create("external_validation", "Measure token use later", "orchestrator", "run_external_check")] }),
     control(),
   ], 2);
-  assert.equal(result.completionState, "incomplete");
-  assert.equal(result.stopReason, "invalid_control");
-  assert.equal(result.canStop, false);
-  assert.deepEqual(result.itemRegistry, []);
-  assert.equal(result.consistencyErrors.some((error) => error.code === "completion_registry_mismatch"), true);
+  // H4: the itemRegistry is the source of truth. An external_validation item derives
+  // completionState=blocked and the session stops cleanly on it (agents agreed; the only thing left is an
+  // outside check), instead of the round being invalidated. The declared goalStatus=satisfied is normalized
+  // to the registry via a warning, not a consistency error.
+  assert.equal(result.completionState, "blocked");
+  assert.equal(result.stopReason, "external_block");
+  assert.equal(result.canStop, true);
+  assert.equal(result.itemRegistry.length, 1);
+  assert.equal(result.itemRegistry[0].kind, "external_validation");
+  assert.equal(result.consistencyErrors.length, 0);
+  assert.equal(result.warnings.some((warning) => warning.code === "goal_status_normalized"), true);
 });
 
 test("control parsing exposes closed repair diagnostics without broadening the whitelist", () => {
@@ -402,7 +408,9 @@ test("a parseable but inconsistent round still surfaces the raised disagreement"
   assert.equal(result.allValid, false);
   assert.equal(result.controlsParseable, true);
   assert.equal(result.consistencyErrors.some((error) => error.code === "missing_user_decision"), true);
-  assert.equal(result.consistencyErrors.some((error) => error.code === "completion_registry_mismatch"), true);
+  // H4: the declared-vs-registry completion mismatch is now a normalization warning, not an invalidating
+  // error — the round is still invalid here, but only because of the real missing_user_decision error.
+  assert.equal(result.warnings.some((warning) => warning.code === "goal_status_normalized"), true);
   assert.deepEqual(result.proposedDisagreements, ["Motivation vs learning-journey quality"]);
 });
 

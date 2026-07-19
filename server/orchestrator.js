@@ -820,6 +820,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       continueReason: assessment.continueReason,
       changedBy: messages.filter((message) => message.control?.substantiveDelta).map((message) => message.agent),
       consistencyErrors: assessment.consistencyErrors,
+      warnings: assessment.warnings,
     });
 
     if (mode === "chat") {
