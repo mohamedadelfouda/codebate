@@ -259,16 +259,18 @@ function makeMessage({ author, agent, role, content, round, phase, mode }) {
   };
 }
 
-// A bounded, safe preview of a still-forming answer for the live UI: scan only the tail (so a long answer
-// can't make each 100ms emit O(4MiB)), drop any complete <agent-control> block AND everything from an
-// unmatched opening tag onward (so an incomplete machine block never reaches the UI), then redact and cap.
+// A bounded, safe preview of a still-forming answer for the live UI. It previews the HEAD, not the tail: the
+// <agent-control> block is emitted at the very end, so a bounded prefix is answer text, and sanitizing a
+// bounded prefix (not the whole 4MiB buffer) keeps each 100ms emit cheap. Because we sanitize BEFORE capping
+// and there is no earlier context, no secret or control-block fragment can straddle the cut — we drop any
+// complete block or unmatched opening tag, redact, THEN cap.
 const STREAM_PREVIEW_CHARS = 600;
 function streamingPreview(full) {
-  const tail = String(full).slice(-(STREAM_PREVIEW_CHARS * 2));
-  const noComplete = stripAgentControl(tail);
-  const openAt = noComplete.toLowerCase().lastIndexOf("<agent-control>");
+  const head = String(full).slice(0, STREAM_PREVIEW_CHARS * 3);
+  const noComplete = stripAgentControl(head);
+  const openAt = noComplete.toLowerCase().indexOf("<agent-control>");
   const clean = openAt === -1 ? noComplete : noComplete.slice(0, openAt);
-  return redact(clean).trimEnd().slice(-STREAM_PREVIEW_CHARS);
+  return redact(clean).trimEnd().slice(0, STREAM_PREVIEW_CHARS);
 }
 
 // The most recent substantive agent answer already in the session. When the user flips an

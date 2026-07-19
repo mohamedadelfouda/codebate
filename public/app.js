@@ -943,7 +943,7 @@ async function openSession(id) {
   connectorRequests.invalidate();
   currentSessionId = id;
   currentSession = null;
-  if (switching) currentRunId = null;
+  if (switching) { currentRunId = null; streamingText = {}; liveAgents = {}; }
   routeSuggestion = null;
   pendingExec = null;
   renderedMessageSessionId = null;
@@ -1392,7 +1392,7 @@ function handleEvent(event) {
   if (!shouldHandleRunEvent(currentRunId, event)) return;
   if (event.type === "run_started") { currentRunId = event.runId; liveAgents = {}; streamingText = {}; renderLiveStrip(); setRunning(true, `${discussionModeLabel(event.mode)} · ${formatLocaleNumber(lang, event.rounds)} ${t("roundsShort")}`); }
   if (event.type === "agent_start") { const s = `${phaseLabel(event.phase)} · ${t("roundWord")} ${formatLocaleNumber(lang, event.round)}`; liveAgents[event.agent] = s; renderLiveStrip(); setAgentState(event.agent, s, "running"); }
-  if (event.type === "agent_activity" && event.event?.text) { const s = humanizeActivity(event.event); if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); } setAgentState(event.agent, s, "running"); }
+  if (event.type === "agent_activity" && event.event) { const s = humanizeActivity(event.event); if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); } setAgentState(event.agent, s, "running"); }
   if (event.type === "agent_complete") { delete streamingText[event.agent]; liveAgents[event.agent] = t("replied"); renderLiveStrip(); setAgentState(event.agent, t("replied"), "done"); }
   if (event.type === "agent_delta") {
     streamingText[event.agent] = event.text;
