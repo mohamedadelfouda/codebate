@@ -1394,7 +1394,13 @@ function handleEvent(event) {
   if (event.type === "agent_start") { const s = `${phaseLabel(event.phase)} · ${t("roundWord")} ${formatLocaleNumber(lang, event.round)}`; liveAgents[event.agent] = s; renderLiveStrip(); setAgentState(event.agent, s, "running"); }
   if (event.type === "agent_activity" && event.event?.text) { const s = humanizeActivity(event.event); if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); } setAgentState(event.agent, s, "running"); }
   if (event.type === "agent_complete") { delete streamingText[event.agent]; liveAgents[event.agent] = t("replied"); renderLiveStrip(); setAgentState(event.agent, t("replied"), "done"); }
-  if (event.type === "agent_delta") { streamingText[event.agent] = event.text; try { renderDecisionCards(); } catch { /* decision cards not mounted in this view */ } }
+  if (event.type === "agent_delta") {
+    streamingText[event.agent] = event.text;
+    const s = t("agentWriting");
+    if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); }
+    setAgentState(event.agent, s, "running");
+    try { renderDecisionCards(); } catch { /* decision cards not mounted in this view */ }
+  }
   if (["run_complete","run_stopped","run_error"].includes(event.type)) {
     liveAgents = {}; streamingText = {}; renderLiveStrip();
     setRunning(false, event.type === "run_complete" ? t("runDone") : event.type === "run_stopped" ? t("runStopped") : localizedFailure({ code: event.code, detail: event.error }));
@@ -2376,7 +2382,7 @@ function renderDecisionCards() {
     if (streaming != null) {
       // A1: the answer as it streams in (Claude), redacted + control-stripped server-side. A blinking caret
       // marks it as still forming; agent_complete clears it and the stored final message takes over.
-      body = `<div class="dcard-body md dcard-streaming">${renderMarkdown(String(streaming).slice(0, 600))}<span class="stream-caret" aria-hidden="true"></span></div>`;
+      body = `<div class="dcard-body dcard-streaming"><p>${esc(streaming)}<span class="stream-caret" aria-hidden="true"></span></p></div>`;
     } else if (message) {
       const meta = message.meta || {};
       const footParts = [

@@ -259,6 +259,18 @@ function makeMessage({ author, agent, role, content, round, phase, mode }) {
   };
 }
 
+// A bounded, safe preview of a still-forming answer for the live UI: scan only the tail (so a long answer
+// can't make each 100ms emit O(4MiB)), drop any complete <agent-control> block AND everything from an
+// unmatched opening tag onward (so an incomplete machine block never reaches the UI), then redact and cap.
+const STREAM_PREVIEW_CHARS = 600;
+function streamingPreview(full) {
+  const tail = String(full).slice(-(STREAM_PREVIEW_CHARS * 2));
+  const noComplete = stripAgentControl(tail);
+  const openAt = noComplete.toLowerCase().lastIndexOf("<agent-control>");
+  const clean = openAt === -1 ? noComplete : noComplete.slice(0, openAt);
+  return redact(clean).trimEnd().slice(-STREAM_PREVIEW_CHARS);
+}
+
 // The most recent substantive agent answer already in the session. When the user flips an
 // existing discussion into debate with a message like "let's debate this", THAT answer is the
 // real subject — not the switch message. Returned verbatim (control blocks were already
@@ -759,11 +771,12 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             if (event.kind === "delta") {
               deltaBuffer.append(event.text);
               // Stream the visible answer to the UI as it forms — throttled so a fast token stream can't flood
-              // SSE, and redacted + control-stripped on every emit so no secret or machine block shows mid-flight.
+              // SSE, and sent as a bounded, redacted, control-safe preview (see streamingPreview) so a long
+              // answer can't blow up the payload and no secret or machine block shows mid-flight.
               const now = Date.now();
               if (now - lastDeltaEmit >= 100) {
                 lastDeltaEmit = now;
-                emit({ type: "agent_delta", sessionId, runId: state.runId, agent, text: redact(stripAgentControl(deltaBuffer.toString())), round, phase });
+                emit({ type: "agent_delta", sessionId, runId: state.runId, agent, text: streamingPreview(deltaBuffer.toString()), round, phase });
               }
             } else {
               const visibleEvent = event?.text ? { ...event, text: redact(event.text) } : event;
