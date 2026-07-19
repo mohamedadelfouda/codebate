@@ -142,20 +142,22 @@ test("every task-bearing prompt frames attachments as material, not new instruct
     synthesisPrompt({ ...base, mode: "collaboration" }),
   ]) {
     assert.match(prompt, /\[Attached files\]/);
-    assert.match(prompt, /material to act ON/);
+    // Analysis-request vs explicit-delegation are distinguished (an attachment isn't always "the task").
+    assert.match(prompt, /explicitly delegated/);
   }
   // The finalizer additionally refocuses on the user's actual request if the discussion drifted.
   assert.match(synthesisPrompt({ ...base, mode: "collaboration" }), /drifted/);
 });
 
-test("round-bearing prompts mark the orchestrator's round as authoritative over stale prior-run verdicts", () => {
-  // Resume: an interrupted run leaves "rounds completed"/verdict text in the transcript; the agent must trust
-  // the round it's given, not that older state.
+test("round-bearing prompts mark the orchestrator's round as authoritative but keep a completed prior run", () => {
+  // Resume: an INTERRUPTED run leaves stale "rounds completed" text; the agent trusts the given round. But a
+  // prior run that finished normally is still valid follow-up context and must not be discarded.
   const collab = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
   const debate = debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 2 });
   assert.match(collab, /round 3 of THIS run/);
-  assert.match(collab, /previous, interrupted run/i);
-  assert.match(debate, /previous, interrupted run/i);
+  assert.match(collab, /interrupted and resumed/i);
+  assert.match(collab, /finished normally is still valid context/i);
+  assert.match(debate, /interrupted and resumed/i);
 });
 
 test("every phase forbids narrating tool usage or CLI errors in the reader-facing answer (H9)", () => {
