@@ -564,6 +564,11 @@ test("a converged round with a late change makes the next round a confirmation r
     assert.equal(outcome.completedRounds, 3);
     assert.equal(outcome.stoppedEarly, true);
     assert.equal(saved.messages.some((message) => message.round === 4), false);
+    // H2: per-round diagnostics record why each round continued and who changed the proposal.
+    assert.equal(outcome.roundDiagnostics.length, 2);
+    assert.deepEqual(outcome.roundDiagnostics.map((diagnostic) => diagnostic.continueReason), ["awaiting_confirmation", "stopped"]);
+    assert.deepEqual(outcome.roundDiagnostics[0].changedBy, ["claude"]);
+    assert.deepEqual(outcome.roundDiagnostics[1].changedBy, []);
   } finally {
     await cleanupSession(session.id);
   }

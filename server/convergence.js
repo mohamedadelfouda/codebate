@@ -530,6 +530,14 @@ function discussionState(validation) {
   // participants only re-open on a genuine decision change, instead of drifting into marginal re-tweaks
   // that keep proposalChanged=true and never converge. Mutually exclusive with canStop by construction.
   const awaitingConfirmation = roundValid && agreementState === "converged" && proposalChanged && !agentWorkPending;
+  // Why this round did (or didn't) end the session — recorded per round so a run can be diagnosed from
+  // its export instead of only the final assessment. Cases are exhaustive and ordered by precedence.
+  const continueReason = canStop ? "stopped"
+    : !roundValid ? (validation.consistencyErrors.length ? "consistency_error" : "invalid_control")
+    : awaitingConfirmation ? "awaiting_confirmation"
+    : agreementState !== "converged" ? "open_disagreement"
+    : agentWorkPending ? "agent_work_pending"
+    : "proposal_changed";
   // Reason still follows the aggregate completion state — needs_user and blocked already imply
   // their matching official item through the round consistency rules, so this stays faithful to
   // what the agents reported. The new case this enables, an agreed-but-incomplete stop, reports
@@ -539,13 +547,14 @@ function discussionState(validation) {
     : !canStop
       ? null
       : { satisfied: "complete", needs_user: "user_decision", blocked: "external_block", incomplete: "complete" }[completionState];
-  return { canStop, awaitingConfirmation, agreementState, completionState, stopReason, approvedRegistry, pendingItems, unclassifiedPoints, disagreements, proposedDisagreements, proposalChanged };
+  return { canStop, awaitingConfirmation, continueReason, agreementState, completionState, stopReason, approvedRegistry, pendingItems, unclassifiedPoints, disagreements, proposedDisagreements, proposalChanged };
 }
 
 function assessmentPayload(validation, state) {
   return {
     canStop: state.canStop,
     awaitingConfirmation: state.awaitingConfirmation,
+    continueReason: state.continueReason,
     agreementState: state.agreementState,
     completionState: state.completionState,
     stopReason: state.stopReason,

@@ -288,7 +288,7 @@ function discussionOutcomePhase(assessment) {
   }[assessment.stopReason] || "needs_more_rounds";
 }
 
-export function buildDiscussionOutcome(assessment, requestedRounds, completedRounds, controlRepairStats = null) {
+export function buildDiscussionOutcome(assessment, requestedRounds, completedRounds, controlRepairStats = null, roundDiagnostics = []) {
   const phase = discussionOutcomePhase(assessment);
   return {
     outcomeVersion: 1,
@@ -311,6 +311,7 @@ export function buildDiscussionOutcome(assessment, requestedRounds, completedRou
     conflicts: structuredClone(assessment.conflicts),
     controlValid: assessment.allValid,
     controlsParseable: assessment.controlsParseable,
+    roundDiagnostics: structuredClone(roundDiagnostics),
     ...(controlRepairStats ? { controlRepairStats: structuredClone(controlRepairStats) } : {}),
   };
 }
@@ -807,6 +808,19 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
     let lastAssessment = null;
     let officialOutcome = null;
     let proposalVersion = 1;
+    // Per-round diagnostics: why each round continued (or stopped) and who changed the proposal. Recorded
+    // for every assessed round so a run is diagnosable from its outcome/export, not only the final state.
+    const roundDiagnostics = [];
+    const recordDiagnostic = (round, messages, assessment) => roundDiagnostics.push({
+      round,
+      agreementState: assessment.agreementState,
+      proposalChanged: assessment.proposalChanged,
+      awaitingConfirmation: assessment.awaitingConfirmation,
+      canStop: assessment.canStop,
+      continueReason: assessment.continueReason,
+      changedBy: messages.filter((message) => message.control?.substantiveDelta).map((message) => message.agent),
+      consistencyErrors: assessment.consistencyErrors,
+    });
 
     if (mode === "chat") {
       // Simple chat: each agent answers the user independently, in parallel, one pass.
@@ -868,6 +882,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         }), state);
         const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry);
         lastAssessment = assessment;
+        recordDiagnostic(round, roundMessages, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
         if (assessment.proposalChanged) proposalVersion += 1;
@@ -925,6 +940,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         }), state);
         const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry);
         lastAssessment = assessment;
+        recordDiagnostic(round, roundMsgs, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
         if (assessment.proposalChanged) proposalVersion += 1;
@@ -939,6 +955,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         rounds,
         completedRounds,
         completedControlRepairStats(controlRepairStats),
+        roundDiagnostics,
       );
       const outcomeMessage = makeMessage({
         author: "system",

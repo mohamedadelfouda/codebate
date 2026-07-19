@@ -128,11 +128,13 @@ test("awaitingConfirmation gates one confirmation round when a converged round c
   const settled = assessRound([control(), control()], 2);
   assert.equal(settled.canStop, true);
   assert.equal(settled.awaitingConfirmation, false);
+  assert.equal(settled.continueReason, "stopped");
 
   const lateChange = assessRound([control(), control({ substantiveDelta: true })], 2);
   assert.equal(lateChange.canStop, false);
   assert.equal(lateChange.awaitingConfirmation, true);
   assert.equal(lateChange.agreementState, "converged");
+  assert.equal(lateChange.continueReason, "awaiting_confirmation");
 });
 
 test("a user decision stops discussion and produces one derived next step", () => {
