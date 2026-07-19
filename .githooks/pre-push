@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# review-gate:managed-hook — review-gate OWNS this file; the installer may overwrite
+# it on reinstall. (A hook of YOURS that merely CALLS review-gate won't carry this
+# marker, so the installer leaves it alone.)
+# review-gate pre-push hook (universal enforcement for push-mode repos).
+# git passes the pushed refs on stdin — the gate validates the actual commits being pushed.
+# Defers to the repo-local gate; no-ops if absent or not in push mode.
+# Bypass (honesty escape hatch): git push --no-verify
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+GATE="$ROOT/.review-gate/review-gate.sh"
+[ -n "$ROOT" ] && [ -f "$GATE" ] || exit 0
+exec bash "$GATE" prepush

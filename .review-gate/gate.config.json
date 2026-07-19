@@ -1,0 +1,21 @@
+{
+  "$comment": "Review Gate config for Codebate. gateMode 'push' (fires on git push, marker binds to HEAD). typecheck = 'npm run check' (node --check across all server/ + public/ files); test = 'npm test' (node:test unit suite). lint stays disabled until a linter is added. perFile:false runs each command once for the whole project.",
+  "gateMode": "push",
+  "verify": {
+    "typecheck": {
+      "cmd": "npm run check",
+      "perFile": false,
+      "enabled": true
+    },
+    "lint": {
+      "enabled": false
+    },
+    "test": {
+      "cmd": "npm test",
+      "perFile": false,
+      "enabled": true
+    }
+  },
+  "lintableExtensions": ["js", "mjs", "cjs"],
+  "codeExtensions": ["js", "mjs", "cjs", "sh", "bash"]
+}

@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .review-gate/review-gate.sh check",
+            "if": "Bash(git push*)",
+            "timeout": 30,
+            "statusMessage": "Review Gate"
+          },
+          {
+            "type": "command",
+            "command": "bash .review-gate/review-gate.sh check",
+            "if": "Bash(gh pr create*)",
+            "timeout": 30,
+            "statusMessage": "Review Gate"
+          }
+        ]
+      }
+    ]
+  }
+}

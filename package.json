@@ -1,0 +1,53 @@
+{
+  "name": "codebate",
+  "productName": "Codebate",
+  "version": "0.2.1",
+  "type": "module",
+  "description": "Local workspace where coding agents challenge, review, and converge — while you stay in control.",
+  "author": "Mohamed Adel Fouda",
+  "main": "desktop/main.js",
+  "bin": { "codebate": "bin/codebate.mjs" },
+  "files": ["bin", "server", "public", "desktop", "CHANGELOG.md", "README.ar.md"],
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "desktop": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "check": "node scripts/check-syntax.mjs",
+    "lint": "eslint \"server/**/*.js\" \"public/**/*.js\" \"scripts/**/*.mjs\" \"test/**/*.{js,mjs}\"",
+    "test": "node --experimental-test-module-mocks --test \"test/unit/*.test.js\" \"test/git/*.test.js\"",
+    "test:coverage": "node --experimental-test-module-mocks --test --experimental-test-coverage --test-coverage-lines=75 --test-coverage-branches=70 --test-coverage-functions=70 \"test/unit/*.test.js\" \"test/git/*.test.js\"",
+    "test:browser": "node test/browser/responsive-shell.mjs && node test/browser/sse-resync.mjs && node test/browser/setup-doctor.mjs",
+    "test:smoke": "node test/smoke/source-server.mjs && node test/smoke/cli-launcher.mjs",
+    "test:integration": "node --test \"test/integration/*.test.js\"",
+    "ci": "node scripts/check-syntax.mjs && node --experimental-test-module-mocks --test \"test/unit/*.test.js\" \"test/git/*.test.js\""
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/mohamedadelfouda/codebate#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mohamedadelfouda/codebate.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mohamedadelfouda/codebate/issues"
+  },
+  "packageManager": "pnpm@10.12.1",
+  "config": {
+    "forge": "./forge.config.cjs"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "7.11.2",
+    "@electron-forge/maker-deb": "7.11.2",
+    "@electron-forge/maker-dmg": "7.11.2",
+    "@electron-forge/maker-rpm": "7.11.2",
+    "@electron-forge/maker-squirrel": "7.11.2",
+    "@electron-forge/maker-zip": "7.11.2",
+    "electron": "43.1.1",
+    "electron-winstaller": "5.4.4",
+    "eslint": "10.7.0"
+  }
+}

@@ -1,0 +1,8 @@
+
+# review-gate: shell scripts/hooks must stay LF (a CRLF shebang breaks them on macOS/Linux)
+.githooks/pre-commit text eol=lf
+.githooks/pre-push text eol=lf
+.review-gate/review-gate.sh text eol=lf
+.review-gate/setup.sh text eol=lf
+*.sh text eol=lf
+*.command text eol=lf

@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a reproducible Codebate defect
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, private prompts, session JSON, or undisclosed vulnerability details. Use private vulnerability reporting for security issues.
+  - type: input
+    id: version
+    attributes:
+      label: Codebate version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Include the mode and provider, but redact paths and sensitive data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Relevant safe logs or checks
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics export (recommended)
+      description: >-
+        Attach the output of the in-app "Export diagnostic data" control (it opens /api/diagnostics).
+        It redacts usernames and credentials and captures versions, platform, and provider readiness so
+        we can reproduce faster — but it is not guaranteed free of absolute project paths, so review it
+        and remove anything sensitive before pasting.
+    validations:
+      required: false

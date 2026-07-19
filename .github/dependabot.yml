@@ -1,0 +1,20 @@
+# Keeps CI actions and the (dev-only) toolchain patched. The app itself ships zero runtime dependencies,
+# so these updates only touch devDependencies (electron packaging, eslint) and GitHub Actions.
+version: 2
+updates:
+  # pnpm devDependencies (Dependabot reads pnpm-lock.yaml under the "npm" ecosystem).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      # The electron-forge makers/CLI move together on one version — batch them into one PR.
+      electron-forge:
+        patterns:
+          - "@electron-forge/*"
+          - "electron-winstaller"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

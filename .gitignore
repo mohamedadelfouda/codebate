@@ -1,0 +1,51 @@
+# Real session transcripts contain private prompts/answers/paths — never commit them.
+data/sessions/*.json
+!data/sessions/.gitkeep
+# Trusted absolute CLI paths are machine-local — never commit them.
+data/trusted-cli.json
+data/trusted-cli.json.*.tmp
+data/session-backups/
+data/session-recovery/
+.codebate-runtime.lock*
+# Logs may contain paths/errors — keep them local.
+logs/
+workspace/
+# Disposable execution clones now live here (under the runtime dir), out of any project tree.
+# Anchored to the repo root so it ignores only the default runtime location, not an attached project's own.
+/exec-workspaces/
+*.log
+node_modules/
+.corepack/
+.agents/
+.codex/
+.electron-cache/
+.codex-manual-cache/
+.pnpm-store/
+out/
+test-results/
+*.env
+*.env.*
+!.env.example
+.DS_Store
+.agent-workspaces/
+
+# review-gate attestation marker (machine-local)
+.review-gate/.gate/
+
+# Internal planning drafts — kept local, not shipped in the public repo.
+CODEBATE_FIX_PLAN.md
+CODEBATE_FIX_PLAN_v2.1_AMENDMENTS.md
+
+# Remaining-work / plan draft — local only.
+CODEBATE_REMAINING_WORK.md
+
+# Auto Claude data directory
+.auto-claude/
+
+# Auto Claude generated files
+.auto-claude-security.json
+.auto-claude-status
+.claude_settings.json
+.worktrees/
+.security-key
+logs/security/
