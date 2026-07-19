@@ -17,7 +17,9 @@ function boundedExcerpt(text, max) {
 }
 
 export function transcriptFor(session, maxChars = 24000) {
-  const msgs = session.messages ?? [];
+  // Aborted turns (a provider that failed mid-answer) are kept in the session for the reader, but never fed
+  // back to the agents — a surviving agent must not reason from an explicitly incomplete, dropped response.
+  const msgs = (session.messages ?? []).filter((message) => message.meta?.status !== "partial");
   const SEP = "\n\n---\n\n";
   const TRIM = "[Older context was trimmed by the local orchestrator.]";
   const cap = Math.max(maxChars, TRIM.length + SEP.length + 40);

@@ -1370,6 +1370,7 @@ function handleEvent(event) {
   if (event.type === "agent_start") { const s = `${phaseLabel(event.phase)} · ${t("roundWord")} ${formatLocaleNumber(lang, event.round)}`; liveAgents[event.agent] = s; renderLiveStrip(); setAgentState(event.agent, s, "running"); $("liveStatus").textContent = t("working")(event.label); }
   if (event.type === "agent_activity" && event.event?.text) { const s = event.event.text.slice(0, 90); if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); } setAgentState(event.agent, s, "running"); }
   if (event.type === "agent_complete") { liveAgents[event.agent] = t("replied"); renderLiveStrip(); setAgentState(event.agent, t("replied"), "done"); }
+  if (event.type === "agent_dropped") { delete liveAgents[event.agent]; renderLiveStrip(); setAgentState(event.agent, t("agentDropped"), ""); }
   if (["run_complete","run_stopped","run_error"].includes(event.type)) {
     liveAgents = {}; renderLiveStrip();
     setRunning(false, event.type === "run_complete" ? t("runDone") : event.type === "run_stopped" ? t("runStopped") : localizedFailure({ code: event.code, detail: event.error }));

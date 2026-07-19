@@ -1065,7 +1065,7 @@ test("a persistent agent failure drops that agent; the session completes with th
       mode: "collaboration",
       rounds: 2,
       content: "Cache strategy?",
-      finalizer: "none",
+      finalizer: "codex",
       agents: {
         claude: { enabled: true, role: "Collaborator" },
         codex: { enabled: true, role: "Collaborator" },
@@ -1076,7 +1076,7 @@ test("a persistent agent failure drops that agent; the session completes with th
     const saved = await getSession(session.id);
     // Codex fails both attempts in round 1, so it's dropped — but the run does NOT error: it continues with
     // Claude + Cursor and completes on their converged decision.
-    assert.equal(codexCalls, 2); // original attempt + one auto-retry in round 1; then dropped, never called again
+    assert.equal(codexCalls, 2); // round-1 failure + auto-retry, then dropped — and NOT re-invoked as the (dropped) finalizer
     assert.equal(saved.status, "completed");
     assert.equal(events.filter((event) => event.type === "run_error").length, 0);
     // Codex is dropped with a clear notice + event.

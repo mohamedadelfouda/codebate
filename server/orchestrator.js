@@ -884,6 +884,14 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
     const droppedAgents = new Set();
     const roster = () => selected.filter((agent) => !droppedAgents.has(agent));
     const reconcileRound = async (outcome, minSurvivors = 1) => {
+      // Too few agents left to continue (debate needs both sides; every mode needs at least one): that IS a run
+      // failure — claim it and clean up, then re-throw so the outer handler finalizes the session as errored. We
+      // check this FIRST so an all-fail round doesn't post misleading "dropped from the rest of the session"
+      // notices — there is no rest of the session.
+      if (outcome.results.length < minSurvivors) {
+        if (requestRunFailure(state)) await terminateRunChildren(state);
+        throw outcome.failed[0]?.reason || new Error("No agents completed the round");
+      }
       for (const failure of outcome.failed) {
         if (droppedAgents.has(failure.agent)) continue;
         droppedAgents.add(failure.agent);
@@ -898,12 +906,6 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         session.messages.push(note);
         await persistRunProgress(session, state, emit).catch(() => {});
         emit({ type: "agent_dropped", sessionId, runId: state.runId, agent: failure.agent, error: safeError });
-      }
-      // Too few agents left to continue (debate needs both sides; every mode needs at least one): that IS a run
-      // failure — claim it and clean up, then re-throw so the outer handler finalizes the session as errored.
-      if (outcome.results.length < minSurvivors) {
-        if (requestRunFailure(state)) await terminateRunChildren(state);
-        throw outcome.failed[0]?.reason || new Error("No agents completed the round");
       }
       return outcome.results;
     };
@@ -1060,7 +1062,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       if (!(await persistRunProgress(session, state, emit))) throw runInactiveError(state);
     }
 
-    if (mode !== "chat" && finalizer && finalizer !== "none" && selected.includes(finalizer) && !runWasCancelled(state)) {
+    if (mode !== "chat" && finalizer && finalizer !== "none" && roster().includes(finalizer) && !runWasCancelled(state)) {
       const prompt = synthesisPrompt({
         session,
         agentLabel: provider(finalizer).label,
