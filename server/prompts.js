@@ -16,7 +16,13 @@ function boundedExcerpt(text, max) {
   return `${value.slice(0, head)}\n…[truncated]…\n${value.slice(value.length - (max - head))}`;
 }
 
-export function transcriptFor(session, maxChars = 24000) {
+// How much of the running transcript to hand each agent. Big on purpose: modern model windows hold far more
+// than the old 24k, and aggressively trimming the discussion is exactly what made a follow-up ("modify the
+// plan") lose the plan. One tunable constant — a smaller-window provider lowers it via contextBudgetChars in
+// the provider registry, and the pins below (original task + current proposals + latest outcome) survive any
+// trim regardless.
+const TRANSCRIPT_BUDGET_CHARS = 200000;
+export function transcriptFor(session, maxChars = TRANSCRIPT_BUDGET_CHARS) {
   // Aborted turns (a provider that failed mid-answer) are kept in the session for the reader, but never fed
   // back to the agents — a surviving agent must not reason from an explicitly incomplete, dropped response.
   const msgs = (session.messages ?? []).filter((message) => message.meta?.status !== "partial");
@@ -56,54 +62,59 @@ export function transcriptFor(session, maxChars = 24000) {
   }
   if (!overflow) return full.join(SEP);
 
-  // Under delta-only middle rounds the full plan/position lives ONLY in the round-1 agent
-  // turns, and a blind tail-slice would drop them (they sit at the head). So keep them as
-  // verbatim "anchors" and fill the rest from the most recent tail.
-  //
-  // But sessions are PERSISTENT and multi-run: each new task appends another `user` turn and
-  // a fresh round-1 opener to the same message list. Matching every round===1 would pin
-  // stale proposals from earlier, unrelated tasks — wasting the budget on exactly the
-  // full-rewrite bloat this change removes, and potentially dropping the current task. So
-  // scope the anchors to the CURRENT run only: the latest `user` turn and the round-1 agent
-  // turns after it.
+  // Overflow: smart-compact instead of a blind trim. Pin the turns a follow-up depends on, fill the rest from
+  // the newest tail, then emit everything in CHRONOLOGICAL order with a trim marker at each elided gap (so an
+  // earlier turn never reads as if it came after a later one). Pins, in priority order:
+  //   • the ORIGINAL task (first user turn) — the subject the whole session is about;
+  //   • the NEWEST turn — continuity for the next round;
+  //   • the latest official outcome (the agreed state so far);
+  //   • the CURRENT run's round-1 agent turns — in a delta-only discussion the full proposal/plan lives ONLY
+  //     here (later rounds are deltas, and the outcome record is status, not the plan), so a "modify the plan"
+  //     follow-up needs them. This is why the plan survives even a finalizer-less collaboration.
+  const firstUserIdx = msgs.findIndex((message) => message.author === "user");
   let lastUserIdx = -1;
   for (let i = msgs.length - 1; i >= 0; i -= 1) { if (msgs[i].author === "user") { lastUserIdx = i; break; } }
-  const anchorIdx = [];
-  if (lastUserIdx >= 0) anchorIdx.push(lastUserIdx);
+  let latestOutcomeIdx = -1;
+  for (let i = msgs.length - 1; i >= 0; i -= 1) { if (msgs[i].meta?.outcome) { latestOutcomeIdx = i; break; } }
+  const proposalIdx = [];
   for (let i = lastUserIdx + 1; i < msgs.length; i += 1) {
-    if (msgs[i].author === "agent" && msgs[i].round === 1) anchorIdx.push(i);
+    if (msgs[i].author === "agent" && msgs[i].round === 1) proposalIdx.push(i);
   }
-  const anchorBudget = Math.max(0, cap - TRIM.length - SEP.length);
-  const anchors = [];
-  let anchorLength = 0;
-  for (const index of anchorIdx) {
-    const separator = anchors.length ? SEP.length : 0;
-    const remaining = anchorBudget - anchorLength - separator;
-    if (remaining < 1) break;
-    const block = render(msgs[index], remaining);
-    anchors.push(block.text);
-    anchorLength += separator + block.text.length;
-    if (block.truncated) break;
-  }
-  const anchorText = anchors.join(SEP);
+  const pins = [...new Set([firstUserIdx, msgs.length - 1, latestOutcomeIdx, ...proposalIdx].filter((index) => index >= 0))];
 
-  // Fill from the most recent tail, strictly AFTER the anchors so the output stays in
-  // chronological order and earlier runs are dropped entirely.
-  const lastAnchor = anchorIdx.length ? anchorIdx[anchorIdx.length - 1] : lastUserIdx;
-  const tail = [];
-  const base = [anchorText, TRIM].filter(Boolean).join(SEP);
-  let tailLength = 0;
-  const tailBudget = Math.max(0, cap - base.length - SEP.length);
-  for (let i = msgs.length - 1; i > lastAnchor; i -= 1) {
-    const separator = tail.length ? SEP.length : 0;
-    const remaining = tailBudget - tailLength - separator;
-    if (remaining < 1) break;
-    const block = render(msgs[i], remaining);
-    tail.unshift(block.text);
-    tailLength += separator + block.text.length;
-    if (block.truncated) break;
+  // Reserve room for EVERY gap marker up front, so the chronological join can never overflow `cap` and force
+  // the final slice to cut content off the end — which would drop the NEWEST turn (rendered last). Gaps are
+  // bounded by the pinned islands: each pin, plus the head, can open at most one gap, so `pins.length + 2`
+  // markers is a safe upper bound. Render each kept message exactly once, caching by index.
+  const markerCost = TRIM.length + SEP.length;
+  const budget = Math.max(0, cap - (pins.length + 2) * markerCost);
+  const kept = new Map();
+  let used = 0;
+  const keep = (index) => {
+    if (index < 0 || index >= msgs.length || kept.has(index)) return;
+    const remaining = budget - used - (kept.size ? SEP.length : 0);
+    if (remaining < 1) return;
+    const block = render(msgs[index], remaining);
+    kept.set(index, block.text);
+    used += block.text.length + SEP.length;
+  };
+  // Pins first (priority order above), then fill the rest of the tail newest-first until the budget is spent.
+  for (const index of pins) keep(index);
+  for (let i = msgs.length - 1; i >= 0 && used < budget; i -= 1) keep(i);
+
+  // Emit in chronological order, dropping a trim marker wherever a run of messages was elided (before the
+  // first kept turn, between non-adjacent kept turns, and after the last kept turn).
+  const order = [...kept.keys()].sort((a, b) => a - b);
+  const parts = [];
+  let prev = -1;
+  for (const index of order) {
+    if (index > prev + 1) parts.push(TRIM);
+    parts.push(kept.get(index));
+    prev = index;
   }
-  return [base, tail.join(SEP)].filter(Boolean).join(SEP).slice(0, cap);
+  if (order.length && order[order.length - 1] < msgs.length - 1) parts.push(TRIM);
+  if (!parts.length) parts.push(TRIM);
+  return parts.join(SEP).slice(0, cap);
 }
 
 function controlShape(targetVersion) {
@@ -132,7 +143,7 @@ function controlInstruction(targetVersion, itemRegistry = [], confirmationRound 
 <agent-control>${controlShape(targetVersion)}</agent-control>
 Use convergence=converged only if you agree with the latest proposal. goalStatus describes whether the user's actual task is complete, not whether the agents agree. Set substantiveDelta=true only when your answer materially changes the proposal; that creates a newer version and prevents an early stop this round.
 itemProposals are proposals, not official state. For a new item use action=create without itemId or targetItemId. For an existing open item reuse its itemId and use keep_open, resolve, or merge_into; merge_into also requires targetItemId. A user_decision requires user/provide_decision. external_validation requires user, human_operator, or orchestrator with run_external_check. disagreement and remaining_work require agent/resume_agent_round. out_of_scope requires user/provide_decision. Do not include confidence or openPoints in version 2.
-When you and the other agent have genuinely landed in the same place and you're no longer materially changing the proposal, set convergence=converged and substantiveDelta=false so the session can stop early instead of repeating a round with nothing new. goalStatus reflects only whether you can complete THIS answer, not what the user might do afterward: use needs_user (with a user_decision item) only when you genuinely cannot finish your answer until the user decides or supplies missing information, and blocked (with an external_validation item) only when the answer itself cannot be settled until an outside check runs. If you have actually answered the question and the rest is just actions you're recommending the user take next, that is goalStatus=satisfied — put them in your reader-facing answer as next steps, NOT as user_decision or external_validation items. Don't fall back on goalStatus=incomplete just because the task isn't fully finished. Reserve remaining_work for real work another agent round would still add; that is the one signal that legitimately keeps the rounds going.
+When you and the other agents have genuinely landed in the same place and you're no longer materially changing the proposal, set convergence=converged and substantiveDelta=false so the session can stop early instead of repeating a round with nothing new. goalStatus reflects only whether you can complete THIS answer, not what the user might do afterward: use needs_user (with a user_decision item) only when you genuinely cannot finish your answer until the user decides or supplies missing information, and blocked (with an external_validation item) only when the answer itself cannot be settled until an outside check runs. If you have actually answered the question and the rest is just actions you're recommending the user take next, that is goalStatus=satisfied — put them in your reader-facing answer as next steps, NOT as user_decision or external_validation items. Don't fall back on goalStatus=incomplete just because the task isn't fully finished. Reserve remaining_work for real work another agent round would still add; that is the one signal that legitimately keeps the rounds going.
 Current approved itemRegistry (reuse these IDs; omission never closes an item):
 ${JSON.stringify(itemRegistry)}
 Review every open item before making a terminal claim. Reuse its existing itemId. If your answer says it is resolved, obsolete, or no longer needs the user, emit resolve or merge_into. If it remains open, emit keep_open and choose a matching goalStatus. Omission of an open item prevents the terminal claim from being accepted. Do not create a new item for a topic whose itemId is already listed.
@@ -173,7 +184,13 @@ Return exactly one <agent-control> block using this contract:
 Do not use a code fence. Do not write anything after it, and do not write anything before it.`;
 }
 
-export function collaborationPrompt({ session, agentLabel, role, round, totalRounds, userTask, projectSnapshot = "", targetVersion = 1, itemRegistry = [], confirmationRound = false }) {
+export function collaborationPrompt({ session, agentLabel, role, round, totalRounds, userTask, projectSnapshot = "", targetVersion = 1, itemRegistry = [], confirmationRound = false, participants = [], transcriptBudget = TRANSCRIPT_BUDGET_CHARS }) {
+  const others = participants.filter((name) => name && name !== agentLabel);
+  const roster = others.length > 1
+    ? ` The other agents at the table are ${others.join(" and ")} — engage with what EACH of them says, not just one; this is a ${participants.length}-way discussion, so don't collapse it down to a single opposing voice.`
+    : others.length === 1
+      ? ` The other agent at the table is ${others[0]} — engage directly with what they actually say.`
+      : "";
   const tools = projectSnapshot
     ? `You can READ the attached project (Read/Grep/Glob) to ground what you say in the real code — read only, never edit or run anything. When you make a claim about the code, point to the file (and the line when you can), and be honest about what you actually checked versus what you're inferring.`
     : `Work from what's in front of you — don't reach for tools, edit files, or run commands.`;
@@ -184,27 +201,27 @@ export function collaborationPrompt({ session, agentLabel, role, round, totalRou
     ? `Lay out your take in full this round. Talk through what's already solid in the shared work, what you'd change or add and why, the proposal as you'd shape it now, and anything you're honestly still unsure about. Write it the way you'd talk it through with a colleague you respect — in your own voice, not as a stiff numbered form.`
     : confirmationRound
       ? `This is a confirmation round: the group already landed in the same place, and a participant made a late change last round you may not have seen. Read the latest proposal and the others' most recent turn, then either confirm you're still aligned, or — only if it genuinely changes the shared decision — say plainly what has to change. Don't add optional improvements, rephrasing, or new angles.`
-      : `This is a later round, so keep it to what's actually new — don't rewrite the whole plan. In a few honest lines: what you now accept from the other agent's last turn, where they're off and why, the one or two things you're really adding this round, and whatever's still open between you. If you've got nothing substantive left to add, just say so — don't pad it out.`;
+      : `This is a later round, so keep it to what's actually new — don't rewrite the whole plan. In a few honest lines: what you now accept from the others' latest turns, where any of them is off and why, the one or two things you're really adding this round, and whatever's still open between you. Engage with every other agent's points, not just one. If you've got nothing substantive left to add, just say so — don't pad it out.`;
   const control = round >= 2 ? `\n${controlInstruction(targetVersion, itemRegistry, confirmationRound)}\n` : "";
-  return `You're ${agentLabel}, one of two agents thinking this through together in a shared session that the user runs and ultimately decides on.
+  return `You're ${agentLabel}, one of ${participants.length || "several"} agents thinking this through together in a shared session that the user runs and ultimately decides on.${roster}
 Your seat at the table: ${role || "Collaborator"}.
-This is round ${round}, and there's room for up to ${totalRounds} — but you're not here to fill rounds. The moment you and the other agent genuinely land in the same place, the session stops early, and that's exactly the outcome we want.
+This is round ${round}, and there's room for up to ${totalRounds} — but you're not here to fill rounds. The moment all the agents genuinely land in the same place, the session stops early, and that's exactly the outcome we want.
 
-You're not competing. You're building one answer that's better than either of you would reach alone: take what's good in the other agent's work, fix what's weak, add what's missing, and move the shared solution forward. Don't just echo what's already on the table.
+You're not competing. You're building one answer that's better than any of you would reach alone: take what's good in the others' work, fix what's weak, add what's missing, and move the shared solution forward. Don't just echo what's already on the table.
 
 ${guidance}
 ${control}
-Reply in the same language the user last used. You don't literally share a session with the other model — the local orchestrator is handing you the shared transcript, so don't pretend otherwise. ${tools}
+Reply in the same language the user last used. You don't literally share a session with the other models — the local orchestrator is handing you the shared transcript, so don't pretend otherwise. ${tools}
 ${ANSWER_HYGIENE}
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
 What the user asked for [user-provided]:
 ${clean(userTask)}
 
 The conversation so far:
-${transcriptFor(session)}`;
+${transcriptFor(session, transcriptBudget)}`;
 }
 
-export function chatPrompt({ session, agentLabel, role, userTask, capabilities = {}, projectSnapshot = "" }) {
+export function chatPrompt({ session, agentLabel, role, userTask, capabilities = {}, projectSnapshot = "", transcriptBudget = TRANSCRIPT_BUDGET_CHARS }) {
   const web = capabilities.web
     ? `[capability:web=enabled]\nWeb search is available. Use it when the user asks you to verify something, requests sources, or asks about information that may have changed. Stable questions do not need a search.`
     : `[capability:web=disabled]\nWeb search is not available in this run. Never claim that you searched; state which time-sensitive facts you could not verify.`;
@@ -215,7 +232,7 @@ export function chatPrompt({ session, agentLabel, role, userTask, capabilities =
 Current mode: CHAT.
 Your assigned role: ${role || "Assistant"}.
 
-This is a normal chat: answer the user's latest message directly and helpfully in your own voice. ${web} ${project} Another agent is answering the same message separately — do not coordinate with, imitate, or wait for the other agent's answer.
+This is a normal chat: answer the user's latest message directly and helpfully in your own voice. ${web} ${project} The other agents are answering the same message separately — do not coordinate with, imitate, or wait for their answers.
 
 Answer in the same language as the user's latest message. Do not claim you directly share a provider-side session with another model; the local orchestrator is supplying the shared transcript. Do not modify files or run shell commands.
 ${ANSWER_HYGIENE}
@@ -224,10 +241,10 @@ Latest user message [user-provided]:
 ${clean(userTask)}
 
 Shared session transcript (for context only):
-${transcriptFor(session)}`;
+${transcriptFor(session, transcriptBudget)}`;
 }
 
-export function debatePrompt({ session, agentLabel, role, opponentLabel, round, totalRounds, userTask, independent, projectSnapshot = "", targetVersion = 1, itemRegistry = [], proposition = "", confirmationRound = false }) {
+export function debatePrompt({ session, agentLabel, role, opponentLabel, round, totalRounds, userTask, independent, projectSnapshot = "", targetVersion = 1, itemRegistry = [], proposition = "", confirmationRound = false, transcriptBudget = TRANSCRIPT_BUDGET_CHARS }) {
   const tools = projectSnapshot
     ? `You can READ the attached project (Read/Grep/Glob) to ground your argument in the real code — read only, never edit or run anything. When you cite the code, name the file (and the line when you can), and keep what you verified separate from what you're inferring.`
     : `Argue from what's in front of you — don't reach for tools, edit files, or run commands.`;
@@ -265,35 +282,46 @@ ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
 ${subject}
 
 The debate so far:
-${transcriptFor(session)}`;
+${transcriptFor(session, transcriptBudget)}`;
 }
 
-export function synthesisPrompt({ session, agentLabel, role, userTask, mode, projectSnapshot = "", outcome = null }) {
+export function synthesisPrompt({ session, agentLabel, role, userTask, mode, projectSnapshot = "", outcome = null, participants = [], transcriptBudget = TRANSCRIPT_BUDGET_CHARS }) {
   const tools = projectSnapshot
     ? `You may READ the attached project's files (Read/Grep/Glob) to verify claims against the real code — read only, never modify files or run commands.`
     : `Do not use tools or change files.`;
   const officialOutcome = outcome ? JSON.stringify(outcome) : "No machine-readable outcome was produced.";
+  // When the machine outcome couldn't be certified (a control block failed validation), its own agreement /
+  // pending / disagreement lists are unreliable and may be empty even though real items exist — the brief must
+  // then be rebuilt from the transcript instead of trusting those fields.
+  const controlFailed = Boolean(outcome && (outcome.stopReason === "invalid_control" || outcome.agreementState === "unknown"));
+  const roster = participants.length
+    ? `This was a ${participants.length}-agent session: ${participants.join(", ")}. Your brief MUST represent EVERY participant's substantive contributions — do not collapse it into two "sides", and do not drop or under-represent any agent. If one agent raised a point the others didn't, it still belongs in the brief.`
+    : "";
+  const controlNote = controlFailed
+    ? `IMPORTANT — the official outcome's agreement was NOT certified (a control block failed validation), so its pendingItems / disagreements are UNRELIABLE and may be empty even though real open items exist. Do NOT treat those empty lists as proof there are none: read the transcript yourself, surface the real open items and disagreements, and state plainly that the formal agreement wasn't sealed (the technical reason is in stopReason).`
+    : "";
   return `You are ${agentLabel}, preparing a decision brief from a persistent multi-agent session.
 Mode completed: ${String(mode).toUpperCase()}.
 Your role: ${role || "Decision-brief synthesizer"}.
+${roster}
 
-The local orchestrator has already computed and persisted the official outcome below. It is immutable for this response. Explain it faithfully; do not re-evaluate, replace, or contradict its agreement state, completion state, stop reason, pending items, or next steps. Your prose is supporting explanation and cannot change the UI status.
+The local orchestrator computed the official outcome below. Explain it faithfully and never invent an agreement it doesn't record. ${controlNote}
 
 Official outcome:
 ${officialOutcome}
 
-Produce one useful, evidence-aware brief from the full transcript. Do not decide by majority or model reputation, and do not take an external action. Keep the user's decision authority explicit. You may include a clearly labelled recommendation, but distinguish it from verified facts and from the decision only the user can make.
+Produce one useful, evidence-aware brief from the full transcript. Do not decide by majority or model reputation, and do not take an external action. Keep the user's decision authority explicit. Every material point ANY agent raised must end up somewhere in the brief with a clear disposition — accepted / rejected (with reason) / deferred / needs-measurement / owner-decision — never silently dropped.
 
 Required response structure (translate every heading into the user's language):
-1. Official outcome
-2. Areas of agreement
-3. Material disagreements, only if the official outcome contains them
-4. The strongest argument from each side
-5. Verified evidence and unverified claims
-6. Options and the risks of each
-7. Reasoned, non-binding recommendation
-8. Pending decisions or external checks from the official outcome
-9. Next practical step
+1. Official outcome — stated faithfully; if the agreement wasn't certified, say so plainly.
+2. Areas of agreement.
+3. Open items & disagreements — read from the transcript (not only the outcome's lists), each tagged [confirmed finding], [unresolved technical choice], or [owner/product decision].
+4. The strongest point from EACH participant${participants.length ? ` (${participants.join(", ")})` : ""} — one per agent, none skipped.
+5. Verified evidence vs unverified claims.
+6. Options and the risks of each.
+7. Reasoned, non-binding recommendation — and WHY: which options you rejected and the reason, so it reads as a real synthesis of all participants, not one voice.
+8. Decisions that are the user's to make (product/ownership), kept separate from the technical choices above.
+9. Next practical step.
 
 Use the language of the user's latest message. ${tools}
 ${ANSWER_HYGIENE}
@@ -302,7 +330,7 @@ Original/current user task [user-provided]:
 ${clean(userTask)}
 
 Shared session transcript:
-${transcriptFor(session, 30000)}`;
+${transcriptFor(session, transcriptBudget)}`;
 }
 
 export function executionPrompt(task, mode) {

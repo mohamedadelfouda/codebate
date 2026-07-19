@@ -22,6 +22,12 @@ const providers = new Map([
     },
     updateArgs: ["update"],
     updatePackage: "@anthropic-ai/claude-code",
+    // How much of the running transcript this provider can safely be handed (chars, not tokens). Kept per
+    // provider because a single universal ceiling is unsafe: non-Latin scripts (Arabic/CJK) run ~2 chars/token,
+    // so a budget sized for Claude's large window would blow a smaller-window provider's context. The
+    // orchestrator threads this into the prompt builders; the transcript pins (original task + latest outcome)
+    // survive whatever the budget is, so a lower ceiling never drops the essentials.
+    contextBudgetChars: 256000,
     defaultModel: "sonnet",
     models: ["default", "best", "fable", "sonnet", "opus", "haiku"],
     efforts: ["low", "medium", "high", "xhigh", "max"],
@@ -49,6 +55,9 @@ const providers = new Map([
     },
     updateArgs: ["update"],
     updatePackage: "@openai/codex",
+    // Conservative vs Claude's: smaller safe ceiling so a long, mostly-Arabic transcript can't overflow a
+    // tighter window. See the note on the Claude entry.
+    contextBudgetChars: 120000,
     defaultModel: "",
     models: [],
     efforts: ["minimal", "low", "medium", "high", "xhigh"],
@@ -87,6 +96,8 @@ const providers = new Map([
       }),
       url: "https://docs.cursor.com/en/cli/overview",
     },
+    // Conservative ceiling (see the Claude entry's note) — Cursor is review-only and its window varies by model.
+    contextBudgetChars: 120000,
     defaultModel: "",
     models: [],
     efforts: [],

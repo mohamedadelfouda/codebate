@@ -949,6 +949,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             projectRead: Boolean(projectPath && provider(agent).capabilities?.projectRead),
           },
           projectSnapshot: projSnapshot,
+          transcriptBudget: provider(agent).contextBudgetChars,
         });
         return { agent, run: () => callAgent(agent, prompt, 1, "chat"), prune: () => pruneFailedAttempt(agent, 1) };
       }), state);
@@ -966,6 +967,8 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
               totalRounds: rounds,
               userTask,
               projectSnapshot: projSnapshot,
+              participants: selected.map((id) => provider(id).label),
+              transcriptBudget: provider(agent).contextBudgetChars,
             });
             return { agent, run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
           }), state);
@@ -991,6 +994,8 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             targetVersion,
             itemRegistry,
             confirmationRound,
+            participants: selected.map((id) => provider(id).label),
+            transcriptBudget: provider(agent).contextBudgetChars,
           });
           return { agent, run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
@@ -1023,6 +1028,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           independent: true,
           projectSnapshot: projSnapshot,
           proposition,
+          transcriptBudget: provider(agent).contextBudgetChars,
         });
         return { agent, run: () => callAgent(agent, prompt, 1, "opening"), prune: () => pruneFailedAttempt(agent, 1) };
       }), state);
@@ -1051,6 +1057,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             itemRegistry,
             proposition,
             confirmationRound,
+            transcriptBudget: provider(agent).contextBudgetChars,
           });
           return { agent, run: () => callAgent(agent, prompt, round, "rebuttal"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
@@ -1094,6 +1101,8 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         mode,
         projectSnapshot: projSnapshot,
         outcome: officialOutcome,
+        participants: selected.map((id) => provider(id).label),
+        transcriptBudget: provider(finalizer).contextBudgetChars,
       });
       try {
         await callAgent(finalizer, prompt, completedRounds + 1, "synthesis");
