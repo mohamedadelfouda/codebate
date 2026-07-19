@@ -372,16 +372,53 @@ function openDisagreementPoints(outcome) {
   return points.length ? `\nنقط الاختلاف اللي لسه مفتوحة:\n${points.map((point) => `• ${point}`).join("\n")}` : "";
 }
 
+// Name the agent(s) whose control block couldn't be certified in the last round that had a failure, so an
+// invalid_control stop reads as the technical blocker it is — not a fake "the agents didn't agree". Returns ""
+// when there's no per-agent failure recorded (older sessions, or a non-agent cause).
+function controlBlameLine(outcome) {
+  const diagnostics = outcome.roundDiagnostics || [];
+  // Blame the FINAL round's failures only — an agent that slipped in an early round but self-corrected later
+  // is not the blocker of THIS stop. If the final round certified all controls (the stop was a consistency
+  // conflict, not a malformed block), there's nothing to blame → "" → the caller's accurate fallback.
+  const finalRound = diagnostics[diagnostics.length - 1];
+  const failures = finalRound?.controlFailures || [];
+  if (!failures.length) return "";
+  const byAgent = new Map();
+  for (const failure of failures) byAgent.set(failure.agent, failure); // one entry per agent
+  const parts = [...byAgent.values()].map((failure) => {
+    const label = provider(failure.agent)?.label || failure.agent;
+    const reason = failure.repairStatus === "skipped"
+      ? "مايدعمش تصحيح بيانات التحكم"
+      : failure.repairStatus === "failed"
+        ? "حاول يصحّح بيانات التحكم وما نفعش"
+        : "بياناته التحكمية طلعت غير صالحة";
+    const codes = failure.errorCodes?.length ? ` (${failure.errorCodes.join("، ")})` : "";
+    return `${label} ${reason}${codes}`;
+  });
+  return parts.join("، ");
+}
+
 function unfinishedOutcomeReport(outcome) {
   const round = outcome.completedRounds;
   if (outcome.stopReason === "invalid_control") {
-    // If the controls themselves parsed but the round couldn't be certified (a consistency or
-    // version conflict), don't lose what the agents put on the table — surface the disagreement
-    // points they raised instead of an opaque "invalid control data" message.
+    // Case A — the controls PARSED but the round wasn't certified (a consistency/version conflict) and the
+    // agents raised real points. Another round can genuinely resolve this, so surface the points and it's fair
+    // to suggest more rounds here.
     if (outcome.controlsParseable && outcome.proposedDisagreements.length) {
       return `انتهت ${round} جولات. الوكلاء طرحوا نقط اختلاف لكن الجولة ماتعتمدتش بسبب تعارض في بيانات التحكم — ارفع عدد الجولات أو وضّح المطلوب.\nنقط الاختلاف اللي طرحوها:\n${outcome.proposedDisagreements.map((point) => `• ${point}`).join("\n")}`;
     }
-    return `انتهت ${round} جولات من غير ما الوكلاء يوصلوا لاتفاق مؤكَّد. جرّب ترفع عدد الجولات أو توضّح المطلوب أكتر.`;
+    // Case B — a control BLOCK was actually malformed (didn't parse / failed schema, even after a repair
+    // attempt). Name the blocker; raising rounds can't fix a bad control block, so never suggest it.
+    const blame = controlBlameLine(outcome);
+    if (blame) {
+      return `النقاش اتقفل لسبب تقني بعد ${round} جولات: ${blame} — فالنظام ماقدرش يختم الاتفاق رسميًا. ده مش خلاف في المحتوى بين الوكلاء، وزيادة عدد الجولات مش هتحلّه.`;
+    }
+    // No per-agent blame recorded. Keep the reason accurate: valid JSON that hit a consistency conflict is a
+    // different thing from control data that wasn't valid at all.
+    if (outcome.controlsParseable) {
+      return `انتهت ${round} جولات، لكن الجولة ماتعتمدتش رسميًا بسبب تعارض في بيانات التحكم — سبب تقني، مش خلاف في المحتوى.`;
+    }
+    return `انتهت ${round} جولات، لكن بيانات التحكم من الوكلاء ماكانتش صالحة فالاتفاق ماتختمش رسميًا — سبب تقني، مش خلاف في المحتوى.`;
   }
   if (outcome.agreementState === "converged" && outcome.completionState === "incomplete") {
     return `انتهت ${round} جولات. الوكلاء متفقون على الإجابة الحالية، بس لسه فيه شغل وكلاء إضافي ممكن يحسّنها — ارفع عدد الجولات لو عايز يكمّلوا.${pendingItemList(outcome)}`;
@@ -899,6 +936,17 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       changedBy: messages.filter((message) => message.control?.substantiveDelta).map((message) => message.agent),
       consistencyErrors: assessment.consistencyErrors,
       warnings: assessment.warnings,
+      // Which agents' control blocks couldn't be certified this round (after any repair attempt) — lets the
+      // closing report name the real blocker instead of an opaque "no agreement". repairStatus distinguishes
+      // "skipped" (provider can't repair), "failed" (tried, still invalid), "succeeded"/"none".
+      controlFailures: messages
+        .filter((message) => !message.control || message.control.valid === false)
+        .map((message) => ({
+          agent: message.agent,
+          errorCodes: [...(message.control?.errorCodes || [])],
+          repairStatus: message.meta?.controlRepair?.status || "none",
+          repairFailureCode: message.meta?.controlRepair?.failureCode || null,
+        })),
     });
 
     // A provider that keeps failing (even after its automatic retry) is dropped from the rest of the session

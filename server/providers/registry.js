@@ -67,7 +67,13 @@ const providers = new Map([
       projectTransport: "sandbox",
       connectors: false,
       executeModes: ["run"],
-      controlRepair: "unsupported",
+      // A malformed control block from a discussion round is repaired by a follow-up call in READ-ONLY mode
+      // (controlRepairConfig forces permission:"read" → Codex read-only sandbox), asking only for corrected
+      // JSON — no tools, no writes. Previously "unsupported", which SKIPPED repair entirely, so a single
+      // shape slip from Codex failed the whole round (invalid_control) even when the content had converged.
+      // The repair path degrades gracefully if the provider can't return clean JSON (recorded + surfaced),
+      // so enabling it can only help — it never makes a round more invalid than a skip did.
+      controlRepair: "tool-free",
     },
     discoverModels: discoverCodexModels,
     run: runCodex,
@@ -101,7 +107,11 @@ const providers = new Map([
     defaultModel: "",
     models: [],
     efforts: [],
-    capabilities: { web: false, projectRead: true, projectTransport: "sandbox", connectors: false, executeModes: [] },
+    // controlRepair "tool-free": a malformed control block is repaired by a read-only follow-up (plan mode,
+    // permission:"read") asking only for corrected JSON — no tools. Was undefined, which SKIPPED repair, so
+    // one shape slip from Cursor failed the round. Best-effort: degrades gracefully if Cursor can't return
+    // clean JSON, so it never makes a round more invalid than the previous skip did.
+    capabilities: { web: false, projectRead: true, projectTransport: "sandbox", connectors: false, executeModes: [], controlRepair: "tool-free" },
     discoverModels: discoverCursorModels,
     run: runCursor,
   }],

@@ -387,8 +387,14 @@ test("a dropped control block is repaired so genuine agreement is not lost", asy
   }
 });
 
-test("control repair fails closed when the provider cannot guarantee a tool-free call", async (t) => {
+test("control repair fails closed when a provider is not tool-free", async (t) => {
+  // Codex/Cursor now declare controlRepair "tool-free", so simulate a non-tool-free provider by overriding the
+  // capability for the run — the gate must still SKIP repair (repair_not_supported) rather than launch a call
+  // that could use tools. Restored in finally so the override never leaks to another test.
   const session = await createSession("unsupported-control-repair");
+  const codexDefinition = provider("codex");
+  const originalControlRepair = codexDefinition.capabilities.controlRepair;
+  codexDefinition.capabilities = { ...codexDefinition.capabilities, controlRepair: "unsupported" };
   let claudeCalls = 0;
   let codexCalls = 0;
 
@@ -433,6 +439,7 @@ test("control repair fails closed when the provider cannot guarantee a tool-free
     assert.equal(outcome.controlValid, false);
     assert.equal("controlRepairStats" in outcome, false);
   } finally {
+    codexDefinition.capabilities = { ...codexDefinition.capabilities, controlRepair: originalControlRepair };
     await cleanupSession(session.id);
   }
 });
