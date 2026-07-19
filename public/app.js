@@ -1377,12 +1377,22 @@ function contentWithAttachments(base) {
 function autoGrow(el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 120) + "px"; }
 
 /* ---------------- SSE ---------------- */
+// Turn a raw provider activity event into a short, humane status. Adapters emit a `kind` plus a raw `text`
+// that can be a provider event type (e.g. "turn.started"); show the reader a friendly state keyed off `kind`
+// instead of that raw token, so provider event names and diagnostic noise never leak into the status line.
+function humanizeActivity(evt) {
+  switch (evt?.kind) {
+    case "thinking": return t("agentThinking");
+    case "delta": return t("agentWriting");
+    default: return t("agentWorking");
+  }
+}
 function handleEvent(event) {
   if (event.type === "session_updated") loadSession();
   if (!shouldHandleRunEvent(currentRunId, event)) return;
   if (event.type === "run_started") { currentRunId = event.runId; liveAgents = {}; renderLiveStrip(); setRunning(true, `${discussionModeLabel(event.mode)} · ${formatLocaleNumber(lang, event.rounds)} ${t("roundsShort")}`); }
-  if (event.type === "agent_start") { const s = `${phaseLabel(event.phase)} · ${t("roundWord")} ${formatLocaleNumber(lang, event.round)}`; liveAgents[event.agent] = s; renderLiveStrip(); setAgentState(event.agent, s, "running"); $("liveStatus").textContent = t("working")(event.label); }
-  if (event.type === "agent_activity" && event.event?.text) { const s = event.event.text.slice(0, 90); if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); } setAgentState(event.agent, s, "running"); }
+  if (event.type === "agent_start") { const s = `${phaseLabel(event.phase)} · ${t("roundWord")} ${formatLocaleNumber(lang, event.round)}`; liveAgents[event.agent] = s; renderLiveStrip(); setAgentState(event.agent, s, "running"); }
+  if (event.type === "agent_activity" && event.event?.text) { const s = humanizeActivity(event.event); if (event.agent in liveAgents) { liveAgents[event.agent] = s; renderLiveStrip(); } setAgentState(event.agent, s, "running"); }
   if (event.type === "agent_complete") { liveAgents[event.agent] = t("replied"); renderLiveStrip(); setAgentState(event.agent, t("replied"), "done"); }
   if (["run_complete","run_stopped","run_error"].includes(event.type)) {
     liveAgents = {}; renderLiveStrip();
