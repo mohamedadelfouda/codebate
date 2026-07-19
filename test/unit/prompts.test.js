@@ -65,6 +65,14 @@ test("a confirmation round adds a tightened instruction only when flagged", () =
   assertControlContract(confirming, 2); // still a valid control contract
 });
 
+test("the control instruction separates needs_user from post-answer next steps", () => {
+  const prompt = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  assert.match(prompt, /goalStatus reflects only whether you can complete THIS answer/);
+  assert.match(prompt, /needs_user \(with a user_decision item\) only when you genuinely cannot finish/);
+  assert.match(prompt, /recommending the user take next, that is goalStatus=satisfied/);
+  assert.match(prompt, /NOT as user_decision or external_validation items/);
+});
+
 test("control repair requests one control block without a second reader-facing answer", () => {
   const prompt = controlRepairPrompt({
     agentLabel: "Claude",
