@@ -576,6 +576,48 @@ test("a converged round with a late change makes the next round a confirmation r
   }
 });
 
+test("a turn that fails after producing a valid control is recovered, not errored (H5)", async (t) => {
+  const session = await createSession("timeout-recovery");
+  let claudeCalls = 0;
+  let codexCalls = 0;
+  t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls += 1;
+    if (claudeCalls === 1) return providerResult("Claude opening");
+    // Round 2: the CLI emits a full valid control, then the request times out (exit non-zero).
+    const error = new Error("request timed out");
+    error.partial = `Claude's recovered answer.\n${versionedControl({ goalStatus: "satisfied", itemProposals: [] })}`;
+    error.outputTruncated = false;
+    throw error;
+  });
+  t.mock.method(provider("codex"), "run", async () => {
+    codexCalls += 1;
+    if (codexCalls === 1) return providerResult("Codex opening");
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [] }));
+  });
+
+  try {
+    await runOrchestration(session.id, {
+      mode: "collaboration",
+      rounds: 2,
+      content: "Recover the timed-out turn",
+      finalizer: "none",
+      agents: { claude: { enabled: true, role: "Collaborator" }, codex: { enabled: true, role: "Collaborator" } },
+    }, () => {});
+
+    const saved = await getSession(session.id);
+    assert.equal(saved.status, "completed"); // NOT error
+    const recovered = saved.messages.find((message) => message.agent === "claude" && message.round === 2);
+    assert.equal(recovered.meta.status, "completed_recovered");
+    assert.match(recovered.meta.providerWarning, /timed out/);
+    assert.match(recovered.content, /recovered answer/);
+    assert.doesNotMatch(recovered.content, /agent-control/); // the control block is stripped from the answer
+    const outcome = saved.messages.find((message) => message.meta?.outcome)?.meta.outcome;
+    assert.equal(outcome.agreementState, "converged"); // the recovered turn assessed normally
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
 test("a stale target version gets one narrow repair", async (t) => {
   const session = await createSession("target-version-repair");
   let claudeCalls = 0;

@@ -758,8 +758,30 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         result = await providerPromise;
       } catch (error) {
         const safeError = redact(error?.message || String(error));
-        // Save any partial output, clearly labeled — never treat it as a final result.
         const partial = redact(String(error.partial || deltaBuffer.toString())).trim();
+        // If this turn expected a control block and the partial output already contains a complete, valid
+        // one, the agent finished its answer before the CLI failed (e.g. a post-completion timeout). A valid
+        // control is a stronger completion signal than the exit code, so recover the turn instead of erroring
+        // the whole session — record it completed_recovered with a provider warning, and let the round
+        // assessment proceed normally. Truncated output is never recovered (the control may be cut).
+        const expectsControl = round >= 2 && (phase === "collaboration" || phase === "rebuttal");
+        const recoveredControl = expectsControl && partial && !error.outputTruncated ? parseAgentControl(partial) : null;
+        if (recoveredControl?.valid && runAcceptsOutput(sessionId, state)) {
+          const recovered = makeMessage({ author: "agent", agent, role, content: stripAgentControl(partial), round, phase, mode });
+          recovered.control = recoveredControl;
+          recovered.convergence = recoveredControl;
+          recovered.meta = {
+            requestedModel: cfg.model || "(default)", requestedEffort: cfg.effort || "",
+            durationMs: error.durationMs ?? null, exitCode: error.exitCode ?? null, usage: error.usage ?? null,
+            status: "completed_recovered", providerWarning: safeError,
+            contextChars, contextMessages, retryCount: 0, outputTruncated: false,
+          };
+          session.messages.push(recovered);
+          if (!(await persistRunProgress(session, state, emit))) throw runInactiveError(state);
+          emit({ type: "agent_complete", sessionId, runId: state.runId, agent, message: recovered, providerSessionId: error.sessionId || null });
+          return recovered;
+        }
+        // Otherwise, save any partial output, clearly labeled — never treat it as a final result.
         if (partial && runAcceptsOutput(sessionId, state)) {
           const partialMsg = makeMessage({ author: "agent", agent, role, content: partial, round, phase, mode });
           partialMsg.meta = {
