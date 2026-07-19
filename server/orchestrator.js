@@ -449,13 +449,13 @@ async function settlePendingProviders(state, timeoutMs = 5000) {
   return completed;
 }
 
-// Run one round of agents in parallel with single-provider fault tolerance. Unlike a fail-fast join, one
-// agent's failure no longer aborts the round: the siblings finish, then each failed agent is retried once
-// automatically (its failed partial is pruned first, so a successful retry leaves exactly one turn for that
-// agent/round). A user cancellation still aborts immediately; only a failure that survives the retry claims
-// the run failure and terminates any stragglers — the same terminal outcome as before, just reached after
-// the siblings had their turn instead of the instant the first agent fell over. Each unit is
-// { run: () => Promise<message>, prune?: () => void }.
+// Run one round of agents in parallel with single-provider fault tolerance. One agent's failure no longer
+// aborts the round: the siblings finish, then each failed agent is retried once automatically (its failed
+// partial is pruned first, so a successful retry leaves exactly one turn for that agent/round). A user
+// cancellation still aborts immediately. A provider failure that survives its retry does NOT kill the run —
+// the round returns the working turns plus which agents failed, so the caller (reconcileRound) can drop them
+// and continue the session with the rest, or fail if too few remain. Each unit is
+// { agent, run: () => Promise<message>, prune?: () => void }; returns { results: message[], failed: {agent, reason}[] }.
 async function runResilientRound(units, state, autoRetries = 1) {
   const providerFailure = (outcome) => outcome.status === "rejected" && !outcome.reason?.runInactive;
   const outcomes = await Promise.allSettled(units.map((unit) => unit.run()));
@@ -463,20 +463,22 @@ async function runResilientRound(units, state, autoRetries = 1) {
   for (let pass = 0; pass < autoRetries; pass += 1) {
     const failed = outcomes.map((outcome, i) => (providerFailure(outcome) ? i : -1)).filter((i) => i >= 0);
     if (!failed.length) break;
-    // Claiming failure flips the run to "failing", which would reject the retry itself — so we never claim it
-    // until the retries are spent. Prune each failed attempt's partial before re-running so a success replaces
-    // it rather than sitting beside it.
+    // Prune each failed attempt's partial before re-running so a success replaces it rather than sitting beside it.
     await Promise.all(failed.map((i) => units[i].prune?.()));
     const retried = await Promise.allSettled(failed.map((i) => units[i].run()));
     if (runWasCancelled(state)) throw runInactiveError(state);
     failed.forEach((i, k) => { outcomes[i] = retried[k]; });
   }
-  const rejected = outcomes.find((outcome) => outcome.status === "rejected");
-  if (rejected) {
-    if (!rejected.reason?.runInactive && requestRunFailure(state)) await terminateRunChildren(state);
-    throw rejected.reason;
-  }
-  return outcomes.map((outcome) => outcome.value);
+  // A cancellation/supersede rejection still aborts the whole run; a plain provider failure is reported, not thrown.
+  const inactive = outcomes.find((outcome) => outcome.status === "rejected" && outcome.reason?.runInactive);
+  if (inactive) throw inactive.reason;
+  const results = [];
+  const failed = [];
+  outcomes.forEach((outcome, i) => {
+    if (outcome.status === "fulfilled") results.push(outcome.value);
+    else failed.push({ agent: units[i].agent, reason: outcome.reason });
+  });
+  return { results, failed };
 }
 
 export async function stopRun(sessionId, { settleTimeoutMs = 5000 } = {}) {
@@ -899,10 +901,43 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       warnings: assessment.warnings,
     });
 
+    // A provider that keeps failing (even after its automatic retry) is dropped from the rest of the session
+    // rather than erroring the whole run — so one broken agent (e.g. a 401 from an un-logged-in CLI) doesn't
+    // throw away the answers the others already gave. Each round runs on the surviving roster.
+    const droppedAgents = new Set();
+    const roster = () => selected.filter((agent) => !droppedAgents.has(agent));
+    const reconcileRound = async (outcome, minSurvivors = 1) => {
+      // Too few agents left to continue (debate needs both sides; every mode needs at least one): that IS a run
+      // failure — claim it and clean up, then re-throw so the outer handler finalizes the session as errored. We
+      // check this FIRST so an all-fail round doesn't post misleading "dropped from the rest of the session"
+      // notices — there is no rest of the session.
+      if (outcome.results.length < minSurvivors) {
+        if (requestRunFailure(state)) await terminateRunChildren(state);
+        throw outcome.failed[0]?.reason || new Error("No agents completed the round");
+      }
+      for (const failure of outcome.failed) {
+        if (droppedAgents.has(failure.agent)) continue;
+        droppedAgents.add(failure.agent);
+        const safeError = redact(failure.reason?.message || String(failure.reason));
+        const note = makeMessage({
+          author: "system",
+          content: `${provider(failure.agent).label} couldn't respond and was dropped from the rest of this session: ${safeError}`,
+          phase: "notice",
+          mode,
+        });
+        note.meta = { status: "agent_dropped", agent: failure.agent, error: safeError };
+        session.messages.push(note);
+        await persistRunProgress(session, state, emit).catch(() => {});
+        emit({ type: "agent_dropped", sessionId, runId: state.runId, agent: failure.agent, error: safeError });
+      }
+      return outcome.results;
+    };
+    const minSurvivors = mode === "debate" ? 2 : 1;
+
     if (mode === "chat") {
       // Simple chat: each agent answers the user independently, in parallel, one pass.
       const snapshot = structuredClone(session);
-      await runResilientRound(selected.map((agent) => {
+      const chatOutcome = await runResilientRound(roster().map((agent) => {
         const prompt = chatPrompt({
           session: snapshot,
           agentLabel: provider(agent).label,
@@ -915,13 +950,14 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           },
           projectSnapshot: projSnapshot,
         });
-        return { run: () => callAgent(agent, prompt, 1, "chat"), prune: () => pruneFailedAttempt(agent, 1) };
+        return { agent, run: () => callAgent(agent, prompt, 1, "chat"), prune: () => pruneFailedAttempt(agent, 1) };
       }), state);
+      await reconcileRound(chatOutcome, minSurvivors);
     } else if (mode === "collaboration") {
       for (let round = 1; round <= rounds; round += 1) {
         if (round === 1) {
           const openingSession = structuredClone(session);
-          await runResilientRound(selected.map((agent) => {
+          const openingOutcome = await runResilientRound(roster().map((agent) => {
             const prompt = collaborationPrompt({
               session: openingSession,
               agentLabel: provider(agent).label,
@@ -931,8 +967,9 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
               userTask,
               projectSnapshot: projSnapshot,
             });
-            return { run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
+            return { agent, run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
           }), state);
+          await reconcileRound(openingOutcome, minSurvivors);
           completedRounds = round;
           continue;
         }
@@ -942,7 +979,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         // round is a confirmation round: a tightened prompt asks agents to only re-open on a genuine
         // decision change, so it stops here instead of drifting into marginal re-tweaks.
         const confirmationRound = lastAssessment?.awaitingConfirmation === true;
-        const roundMessages = await runResilientRound(selected.map((agent) => {
+        const roundOutcome = await runResilientRound(roster().map((agent) => {
           const prompt = collaborationPrompt({
             session: snapshot,
             agentLabel: provider(agent).label,
@@ -955,8 +992,9 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             itemRegistry,
             confirmationRound,
           });
-          return { run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
+          return { agent, run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
+        const roundMessages = await reconcileRound(roundOutcome, minSurvivors);
         const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMessages, assessment);
@@ -972,8 +1010,8 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       // last rebuttal, so fall back to the user's message as the proposition.
       const proposition = previousMode === "debate" ? "" : lastSubstantiveAnswer(session);
       const openingSession = structuredClone(session);
-      await runResilientRound(selected.map((agent) => {
-        const opponent = selected.find((key) => key !== agent);
+      const debateOpening = await runResilientRound(roster().map((agent) => {
+        const opponent = roster().find((key) => key !== agent);
         const prompt = debatePrompt({
           session: openingSession,
           agentLabel: provider(agent).label,
@@ -986,8 +1024,9 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           projectSnapshot: projSnapshot,
           proposition,
         });
-        return { run: () => callAgent(agent, prompt, 1, "opening"), prune: () => pruneFailedAttempt(agent, 1) };
+        return { agent, run: () => callAgent(agent, prompt, 1, "opening"), prune: () => pruneFailedAttempt(agent, 1) };
       }), state);
+      await reconcileRound(debateOpening, minSurvivors);
       completedRounds = 1;
 
       for (let round = 2; round <= rounds; round += 1) {
@@ -996,8 +1035,8 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         // Confirmation round (see the collaboration loop): the previous round converged but carried a late
         // change the others hadn't seen, so this round gets the tightened confirm-only prompt.
         const confirmationRound = lastAssessment?.awaitingConfirmation === true;
-        const roundMsgs = await runResilientRound(selected.map((agent) => {
-          const opponent = selected.find((key) => key !== agent);
+        const rebuttalOutcome = await runResilientRound(roster().map((agent) => {
+          const opponent = roster().find((key) => key !== agent);
           const prompt = debatePrompt({
             session: snapshot,
             agentLabel: provider(agent).label,
@@ -1013,8 +1052,9 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
             proposition,
             confirmationRound,
           });
-          return { run: () => callAgent(agent, prompt, round, "rebuttal"), prune: () => pruneFailedAttempt(agent, round) };
+          return { agent, run: () => callAgent(agent, prompt, round, "rebuttal"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
+        const roundMsgs = await reconcileRound(rebuttalOutcome, minSurvivors);
         const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMsgs, assessment);
@@ -1045,7 +1085,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       if (!(await persistRunProgress(session, state, emit))) throw runInactiveError(state);
     }
 
-    if (mode !== "chat" && finalizer && finalizer !== "none" && selected.includes(finalizer) && !runWasCancelled(state)) {
+    if (mode !== "chat" && finalizer && finalizer !== "none" && roster().includes(finalizer) && !runWasCancelled(state)) {
       const prompt = synthesisPrompt({
         session,
         agentLabel: provider(finalizer).label,

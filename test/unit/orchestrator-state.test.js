@@ -992,7 +992,7 @@ test("orchestration request validation rejects unsupported or inconsistent confi
   }
 });
 
-test("2026-07-16 regression: a failure that survives its auto-retry stays terminal, without discarding a finished sibling", async (t) => {
+test("2026-07-16 regression: a persistent failure drops that agent and continues with the survivor", async (t) => {
   const session = await createSession("provider-failure-race");
   const releaseCodex = deferred();
   const claudeFailed = deferred();
@@ -1018,20 +1018,93 @@ test("2026-07-16 regression: a failure that survives its auto-retry stays termin
     await drainSessionWrites(session.id);
 
     const saved = await getSession(session.id);
-    // Claude fails on the original attempt AND its one automatic retry, so the run is still terminal — and the
-    // terminal claim stays singular even though a sibling finished in between (the original race guard holds).
+    // Claude fails on the original attempt AND its one automatic retry. Rather than erroring the whole run, the
+    // session drops Claude and completes on Codex's answer — and the terminal claim stays singular and clean
+    // even though a sibling finished in between (the original race guard still holds).
     assert.equal(claudeCalls, 2);
-    assert.equal(saved.status, "error");
-    assert.equal(saved.activeRun.status, "error");
+    assert.equal(saved.status, "completed");
+    assert.equal(saved.activeRun.status, "completed");
     assert.ok(saved.activeRun.endedAt);
-    assert.equal(events.filter((event) => event.type === "run_error").length, 1);
+    assert.equal(events.filter((event) => event.type === "run_error").length, 0);
+    assert.equal(events.filter((event) => event.type === "run_complete").length, 1);
     assertSingleRunIdentity(events);
-    // But one agent's terminal failure no longer throws away a sibling that already finished: Codex's answer
-    // (produced before the failure became terminal) is kept, not discarded as under the old fail-fast join.
-    assert.equal(saved.messages.some((message) => message.content === "late Codex response"), true);
-    assert.ok(events.some((event) => event.type === "agent_complete" && event.agent === "codex"));
+    // Codex's answer is kept; Claude is dropped with a clear notice + event, not silently discarded.
+    assert.ok(saved.messages.some((message) => message.content === "late Codex response"));
+    assert.ok(events.some((event) => event.type === "agent_dropped" && event.agent === "claude"));
+    assert.ok(saved.messages.some((message) => message.meta?.status === "agent_dropped" && message.meta?.agent === "claude"));
   } finally {
     releaseCodex.resolve();
+    await cleanupSession(session.id);
+  }
+});
+
+test("a persistent agent failure drops that agent; the session completes with the survivors (resilience)", async (t) => {
+  const session = await createSession("resilient-drop");
+  const events = [];
+  let claudeCalls = 0;
+  let cursorCalls = 0;
+  let codexCalls = 0;
+
+  t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls += 1;
+    if (claudeCalls === 1) return providerResult("Claude opening.");
+    return providerResult(`Claude converges.\n${controlBlock("satisfied", [])}`);
+  });
+  t.mock.method(provider("cursor"), "run", async () => {
+    cursorCalls += 1;
+    if (cursorCalls === 1) return providerResult("Cursor opening.");
+    return providerResult(`Cursor agrees.\n${controlBlock("satisfied", [])}`);
+  });
+  t.mock.method(provider("codex"), "run", async () => {
+    codexCalls += 1;
+    throw new Error("401 Unauthorized"); // e.g. an un-logged-in CLI — fails every time
+  });
+
+  try {
+    await runOrchestration(session.id, {
+      mode: "collaboration",
+      rounds: 2,
+      content: "Cache strategy?",
+      finalizer: "codex",
+      agents: {
+        claude: { enabled: true, role: "Collaborator" },
+        codex: { enabled: true, role: "Collaborator" },
+        cursor: { enabled: true, role: "Collaborator" },
+      },
+    }, (event) => events.push(event));
+
+    const saved = await getSession(session.id);
+    // Codex fails both attempts in round 1, so it's dropped — but the run does NOT error: it continues with
+    // Claude + Cursor and completes on their converged decision.
+    assert.equal(codexCalls, 2); // round-1 failure + auto-retry, then dropped — and NOT re-invoked as the (dropped) finalizer
+    assert.equal(saved.status, "completed");
+    assert.equal(events.filter((event) => event.type === "run_error").length, 0);
+    // Codex is dropped with a clear notice + event.
+    assert.ok(events.some((event) => event.type === "agent_dropped" && event.agent === "codex"));
+    assert.ok(saved.messages.some((message) => message.meta?.status === "agent_dropped" && message.meta?.agent === "codex"));
+    // The survivors' answers are kept and the run converged among them.
+    assert.ok(saved.messages.some((message) => message.agent === "claude" && /converges/.test(message.content)));
+    assert.ok(saved.messages.some((message) => message.agent === "cursor" && /agrees/.test(message.content)));
+    assert.equal(saved.messages.find((message) => message.meta?.outcome)?.meta.outcome.agreementState, "converged");
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
+test("if every agent fails, the session still errors (resilience floor)", async (t) => {
+  const session = await createSession("resilient-all-fail");
+  const events = [];
+  t.mock.method(provider("claude"), "run", async () => { throw new Error("all down"); });
+  t.mock.method(provider("codex"), "run", async () => { throw new Error("all down"); });
+
+  try {
+    await runOrchestration(session.id, chatRequest("everyone is down"), (event) => events.push(event));
+    const saved = await getSession(session.id);
+    // Nothing survived, so there's nothing to continue with — that IS a run failure.
+    assert.equal(saved.status, "error");
+    assert.equal(events.filter((event) => event.type === "run_error").length, 1);
+    assertSingleRunIdentity(events);
+  } finally {
     await cleanupSession(session.id);
   }
 });
