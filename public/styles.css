@@ -240,7 +240,7 @@ textarea { resize: none; line-height: 1.55; }
 .segmented { display: flex; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 3px; }
 .mode-btn, .segmented .proj-tab { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 7px; border-radius: 6px; transition: background .12s var(--ease); }
 .mode-btn.is-active, .segmented .proj-tab.is-active { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
-.agents-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.agents-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .agents-grid .agent-card { background: var(--bg); border: 1px solid var(--line-soft); border-radius: 12px; padding: 13px; display: flex; flex-direction: column; gap: 11px; }
 .agents-grid .agent-head { display: flex; align-items: center; gap: 10px; }
 .agent-avatar { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-weight: 800; flex: none; }
@@ -319,7 +319,7 @@ textarea { resize: none; line-height: 1.55; }
 .live-actor strong { display: block; font-size: 12px; }
 .live-actor span { display: block; color: var(--faint); font-size: 11px; margin-top: 2px; }
 
-.agent-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.agent-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .dcard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .dcard-head { padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line-soft); }
 .dcard.claude .dcard-head { background: linear-gradient(90deg, color-mix(in srgb, var(--claude) 18%, transparent), transparent); }
@@ -553,7 +553,7 @@ html[data-theme="light"] .icon-btn.needs-setup::after { background: #c2410c; }
   .workflow.open { display: grid; }
   html[data-preset="simple"] .workflow.open { display: grid !important; }
   .context-col.open { display: flex; }
-  .agent-grid, .live-strip { grid-template-columns: 1fr; }
+  .agents-grid, .agent-grid, .live-strip { grid-template-columns: 1fr; }
   .live-actor + .live-actor { border-inline-start: 0; border-top: 1px solid var(--line-soft); }
   .approval { grid-template-columns: auto minmax(0, 1fr); }
   .approval-actions { grid-column: 1 / -1; }
