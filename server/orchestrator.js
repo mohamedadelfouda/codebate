@@ -781,9 +781,12 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           emit({ type: "agent_complete", sessionId, runId: state.runId, agent, message: recovered, providerSessionId: error.sessionId || null });
           return recovered;
         }
-        // Otherwise, save any partial output, clearly labeled — never treat it as a final result.
+        // Otherwise, save any partial output, clearly labeled — never treat it as a final result. Strip any
+        // <agent-control> block from a control-bearing turn's partial too: an unrecovered partial must never
+        // leak the machine block into the reader-facing content or the export.
         if (partial && runAcceptsOutput(sessionId, state)) {
-          const partialMsg = makeMessage({ author: "agent", agent, role, content: partial, round, phase, mode });
+          const partialContent = expectsControl ? stripAgentControl(partial) : partial;
+          const partialMsg = makeMessage({ author: "agent", agent, role, content: partialContent, round, phase, mode });
           partialMsg.meta = {
             requestedModel: cfg.model || "(default)", requestedEffort: cfg.effort || "",
             durationMs: error.durationMs ?? null, exitCode: error.exitCode ?? null,

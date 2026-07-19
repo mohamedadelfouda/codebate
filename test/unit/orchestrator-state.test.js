@@ -654,6 +654,42 @@ test("a finalizer failure completes the discussion instead of erroring it (H6)",
   }
 });
 
+test("an unrecovered partial strips the agent-control block from its content (H7)", async (t) => {
+  const session = await createSession("partial-strip");
+  let claudeCalls = 0;
+  let codexCalls = 0;
+  t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls += 1;
+    if (claudeCalls === 1) return providerResult("Claude opening");
+    // Round 2 fails with a partial that carries a COMPLETE but INVALID control — H5 won't recover it, so it
+    // lands on the partial path, which must still strip the machine block from the saved content.
+    const error = new Error("stream broke");
+    error.partial = `Claude's partial answer.\n<agent-control>{"broken": true}</agent-control>`;
+    error.outputTruncated = false;
+    throw error;
+  });
+  t.mock.method(provider("codex"), "run", async () => {
+    codexCalls += 1;
+    if (codexCalls === 1) return providerResult("Codex opening");
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [] }));
+  });
+
+  try {
+    await runOrchestration(session.id, {
+      mode: "collaboration", rounds: 2, content: "x", finalizer: "none",
+      agents: { claude: { enabled: true, role: "Collaborator" }, codex: { enabled: true, role: "Collaborator" } },
+    }, () => {});
+
+    const saved = await getSession(session.id);
+    const partialMsg = saved.messages.find((message) => message.agent === "claude" && message.meta?.status === "partial");
+    assert.ok(partialMsg, "the failed turn is saved as a partial");
+    assert.doesNotMatch(partialMsg.content, /<agent-control>/); // machine block stripped from the reader content
+    assert.match(partialMsg.content, /partial answer/);
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
 test("a stale target version gets one narrow repair", async (t) => {
   const session = await createSession("target-version-repair");
   let claudeCalls = 0;
