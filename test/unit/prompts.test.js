@@ -112,6 +112,18 @@ test("debate opening is independent and has no convergence control", () => {
   assert.doesNotMatch(prompt, /<agent-control>/);
 });
 
+test("a debate confirmation round reaffirms agreement instead of rebutting", () => {
+  const rebuttal = debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 2 });
+  assert.match(rebuttal, /go straight at the strongest opposing point/);
+  assert.doesNotMatch(rebuttal, /CONFIRMATION ROUND/);
+
+  const confirming = debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 2, confirmationRound: true });
+  assert.match(confirming, /This is a confirmation round/);
+  assert.doesNotMatch(confirming, /go straight at the strongest opposing point/);
+  assert.match(confirming, /CONFIRMATION ROUND/); // the control instruction is tightened too
+  assertControlContract(confirming, 2);
+});
+
 test("debate rebuttal uses the same versioned control contract", () => {
   const prompt = debatePrompt({ ...base, opponentLabel: "Codex", round: 2, independent: false, targetVersion: 4 });
   assertControlContract(prompt, 4);

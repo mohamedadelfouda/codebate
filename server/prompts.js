@@ -224,7 +224,9 @@ export function debatePrompt({ session, agentLabel, role, opponentLabel, round, 
     : `Argue from what's in front of you — don't reach for tools, edit files, or run commands.`;
   const guidance = independent
     ? `This is your opening. Form your own position from the task and the earlier context — don't shadow how your opponent framed theirs. Make the real case: where you stand and why, your strongest arguments, what you'll honestly concede, where the other side falls short, what evidence or test would actually change your mind, the call you'd make, and how confident you are (0–100). Argue it like you mean it, in your own voice — not as a checklist.`
-    : `This is a rebuttal, so go straight at the strongest opposing point on the table — don't re-argue your whole case. In a few sharp, honest lines: what you now concede from their last turn, your best specific challenge to it, anything genuinely new you're bringing this round, what's still unsettled between you, and your updated confidence (0–100).`;
+    : confirmationRound
+      ? `This is a confirmation round: the group already landed in the same place, and a participant made a late change last round you may not have seen. Read the latest proposal and the other side's most recent turn, then either confirm you're still aligned, or — only if it genuinely changes the shared decision — say plainly what has to change. Don't add optional improvements, rephrasing, or new angles.`
+      : `This is a rebuttal, so go straight at the strongest opposing point on the table — don't re-argue your whole case. In a few sharp, honest lines: what you now concede from their last turn, your best specific challenge to it, anything genuinely new you're bringing this round, what's still unsettled between you, and your updated confidence (0–100).`;
   const control = !independent ? `\n${controlInstruction(targetVersion, itemRegistry, confirmationRound)}\n` : "";
   // When the debate was opened on an existing discussion, the subject is the answer already on
   // the table — the user's message ("let's debate this") is only the trigger. Anchor to it
