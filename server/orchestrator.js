@@ -417,7 +417,14 @@ function unfinishedOutcomeReport(outcome) {
     const blame = controlBlameLine(outcome);
     if (blame) {
       const noDisagreement = disagreementTail ? "" : " ده مش خلاف في المحتوى بين الوكلاء،";
-      return `النقاش اتقفل لسبب تقني بعد ${round} جولات: ${blame} — فالنظام ماقدرش يختم الاتفاق رسميًا.${noDisagreement} وزيادة عدد الجولات مش هتحلّ العطل التقني ده.${disagreementTail}`;
+      // Report only that the OTHER valid controls DECLARED convergence — not that the agents "actually agreed"
+      // (the malformed provider's position is unknown, and the valid agents answered from the pre-round
+      // snapshot). Suppressed when real disagreement points are on the table.
+      const diagnostics = outcome.roundDiagnostics || [];
+      const restConverged = !disagreementTail && diagnostics[diagnostics.length - 1]?.validControlsConverged
+        ? " باقي الوكلاء أعلنوا التوافق في بيانات التحكم، فالعطل التقني ده وحده هو اللي منع الختم الرسمي."
+        : "";
+      return `النقاش اتقفل لسبب تقني بعد ${round} جولات: ${blame} — فالنظام ماقدرش يختم الاتفاق رسميًا.${restConverged}${noDisagreement} وزيادة عدد الجولات مش هتحلّ العطل التقني ده.${disagreementTail}`;
     }
     // No per-agent blame recorded. Keep the reason accurate: valid JSON that hit a consistency conflict is a
     // different thing from control data that wasn't valid at all.
@@ -764,8 +771,8 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       recordControlRepair(controlRepairStats, audit);
     };
 
-    const assessRepairedRound = async (roundMessages, targetVersion, itemRegistry) => {
-      let assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry);
+    const assessRepairedRound = async (roundMessages, targetVersion, itemRegistry, confirmationRound = false) => {
+      let assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationRound);
       if (!assessment.repairTargets.length) return assessment;
       const originalControls = roundMessages.map((message) => message.control);
       await Promise.all(assessment.repairTargets.map(async (target) => {
@@ -780,7 +787,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       }));
       assertRunAcceptsOutput(sessionId, state);
       if (!(await persistRunProgress(session, state, emit))) throw runInactiveError(state);
-      assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry);
+      assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationRound);
       return assessment;
     };
 
@@ -954,6 +961,12 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           repairStatus: message.meta?.controlRepair?.status || "none",
           repairFailureCode: message.meta?.controlRepair?.failureCode || null,
         })),
+      // Did every agent WITH a valid control converge this round? Lets the closing report reassure the user
+      // that a single bad control block sank a near-agreement — the rest had actually agreed.
+      validControlsConverged: (() => {
+        const valid = messages.filter((message) => message.control?.valid);
+        return valid.length > 0 && valid.every((message) => message.control.convergence === "converged");
+      })(),
     });
 
     // A provider that keeps failing (even after its automatic retry) is dropped from the rest of the session
@@ -1055,13 +1068,16 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMessages = await reconcileRound(roundOutcome, minSurvivors);
-        const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry);
+        const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry, confirmationRound);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMessages, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
+        // canStop is checked FIRST: a repeat confirmation round now returns canStop=true even with
+        // proposalChanged=true (the substantiveDelta loop-breaker). The old `if (proposalChanged) …; else if
+        // (canStop)` order would take the proposalChanged branch and loop on forever, never reading canStop.
+        if (assessment.canStop) break;
         if (assessment.proposalChanged) proposalVersion += 1;
-        else if (assessment.canStop) break;
       }
     } else {
       // Anchor the debate to the answer already on the table so a "switch to debate" message
@@ -1117,13 +1133,16 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "rebuttal"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMsgs = await reconcileRound(rebuttalOutcome, minSurvivors);
-        const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry);
+        const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry, confirmationRound);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMsgs, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
+        // canStop is checked FIRST: a repeat confirmation round now returns canStop=true even with
+        // proposalChanged=true (the substantiveDelta loop-breaker). The old `if (proposalChanged) …; else if
+        // (canStop)` order would take the proposalChanged branch and loop on forever, never reading canStop.
+        if (assessment.canStop) break;
         if (assessment.proposalChanged) proposalVersion += 1;
-        else if (assessment.canStop) break;
       }
     }
 

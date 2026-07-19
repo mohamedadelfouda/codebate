@@ -137,6 +137,22 @@ test("awaitingConfirmation gates one confirmation round when a converged round c
   assert.equal(lateChange.continueReason, "awaiting_confirmation");
 });
 
+test("a repeat confirmation round stops instead of looping on over-signalled substantiveDelta", () => {
+  // In the confirmation round the agents are still converged but a provider AGAIN reports a marginal
+  // substantiveDelta. Without the cap this loops to the round limit; with confirmationRound=true the round
+  // stops (the bounded one-confirmation-round contract). A real disagreement would flip agreementState off
+  // "converged", so genuine conflict still keeps going.
+  const controls = [control(), control({ substantiveDelta: true })];
+  // The first late-change round (not yet a confirmation round) still only asks for confirmation.
+  assert.equal(assessRound(controls, 2).awaitingConfirmation, true);
+  // THIS is the confirmation round → stop, converged, and not awaiting again.
+  const confirmed = assessRound(controls, 2, [], true);
+  assert.equal(confirmed.canStop, true);
+  assert.equal(confirmed.awaitingConfirmation, false);
+  assert.equal(confirmed.agreementState, "converged");
+  assert.equal(confirmed.continueReason, "stopped");
+});
+
 test("a user decision stops discussion and produces one derived next step", () => {
   const result = assessRound([
     control({ goalStatus: "needs_user", itemProposals: [create("user_decision", "Choose the rollout mode", "user", "provide_decision")] }),

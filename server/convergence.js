@@ -503,7 +503,7 @@ function agreementStateFor({ roundValid, controls, pendingItems, conflicts, uncl
   return controls.every((control) => control.convergence === "converged") ? "converged" : "unknown";
 }
 
-function discussionState(validation) {
+function discussionState(validation, confirmationRound = false) {
   const { present, roundValid, currentRegistry, application } = validation;
   const approvedRegistry = roundValid ? application.registry : (currentRegistry || []);
   const pendingItems = approvedRegistry.filter((registryItem) => registryItem.status === "open");
@@ -531,13 +531,17 @@ function discussionState(validation) {
   // another round would genuinely help). Completion state stays in the reported outcome, no
   // longer a gate, so an agreed answer that still needs the user or an outside check stops here.
   const agentWorkPending = pendingItems.some((pendingItem) => pendingItem.requiredStep.action === "resume_agent_round");
-  const canStop = roundValid && !proposalChanged && agreementState === "converged" && !agentWorkPending;
+  // A confirmation round is the ONE bounded re-check after a converged round carried a late change. If the
+  // agents are STILL converged with no pending agent work, stop even when a provider self-reports yet another
+  // marginal substantiveDelta — otherwise over-signalling loops to the round limit for nothing. A genuine new
+  // disagreement flips agreementState off "converged", so real conflict still keeps the discussion going.
+  const canStop = roundValid && agreementState === "converged" && !agentWorkPending && (!proposalChanged || confirmationRound);
   // Agreement is reached, but a participant made a late substantive change THIS round. Agents run in
   // parallel on one shared snapshot, so the others haven't seen it yet — the round correctly can't stop.
   // This flags "the next round is a confirmation round": the orchestrator gives it a tightened prompt so
   // participants only re-open on a genuine decision change, instead of drifting into marginal re-tweaks
   // that keep proposalChanged=true and never converge. Mutually exclusive with canStop by construction.
-  const awaitingConfirmation = roundValid && agreementState === "converged" && proposalChanged && !agentWorkPending;
+  const awaitingConfirmation = roundValid && agreementState === "converged" && proposalChanged && !agentWorkPending && !confirmationRound;
   // Why this round did (or didn't) end the session — recorded per round so a run can be diagnosed from
   // its export instead of only the final assessment. Cases are exhaustive and ordered by precedence.
   const continueReason = canStop ? "stopped"
@@ -585,9 +589,9 @@ function assessmentPayload(validation, state) {
   };
 }
 
-export function assessRound(controls, targetVersion, itemRegistry = []) {
+export function assessRound(controls, targetVersion, itemRegistry = [], confirmationRound = false) {
   const validation = validateRound(controls, targetVersion, itemRegistry);
-  return assessmentPayload(validation, discussionState(validation));
+  return assessmentPayload(validation, discussionState(validation, confirmationRound));
 }
 
 function equalJson(left, right) {

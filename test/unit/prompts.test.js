@@ -70,6 +70,13 @@ test("later collaboration rounds request a versioned control contract", () => {
   assert.match(prompt, /do not create a new item/i);
 });
 
+test("the control instruction discourages substantiveDelta over-signalling", () => {
+  const prompt = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  assert.match(prompt, /substantiveDelta=true ONLY when/);
+  assert.match(prompt, /forces another paid round/);
+  assert.match(prompt, /rephrasing, re-emphasis/);
+});
+
 test("a confirmation round adds a tightened instruction only when flagged", () => {
   const normal = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
   assert.doesNotMatch(normal, /CONFIRMATION ROUND/);

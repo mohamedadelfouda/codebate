@@ -37,6 +37,21 @@ test("invalid_control report is honest even without per-agent failure data (olde
   assert.doesNotMatch(report, /ترفع عدد الجولات/);
 });
 
+test("invalid_control report reassures when the other agents had actually converged", () => {
+  // A single bad control block sank a round the OTHER agents had converged on — say so, so the user knows it
+  // was a technical hiccup on a near-agreement, not a real deadlock.
+  const outcome = invalidControlOutcome({
+    roundDiagnostics: [{
+      round: 5,
+      controlFailures: [{ agent: "cursor", errorCodes: ["invalid_control_schema"], repairStatus: "failed" }],
+      validControlsConverged: true,
+    }],
+  });
+  const report = discussionOutcomeReport(outcome);
+  assert.match(report, /Cursor/);
+  assert.match(report, /باقي الوكلاء كانوا فعلاً متفقين/);
+});
+
 test("invalid_control report does not blame a provider that self-corrected before the final round", () => {
   // codex slipped in round 2 but the final round certified everyone; the stop is a consistency conflict, not
   // codex's early slip. The report must NOT name codex — only the final round's failures count as the blocker.
