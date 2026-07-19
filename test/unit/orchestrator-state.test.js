@@ -618,6 +618,42 @@ test("a turn that fails after producing a valid control is recovered, not errore
   }
 });
 
+test("a finalizer failure completes the discussion instead of erroring it (H6)", async (t) => {
+  const session = await createSession("finalizer-isolation");
+  let claudeCalls = 0;
+  let codexCalls = 0;
+  t.mock.method(provider("claude"), "run", async ({ prompt }) => {
+    claudeCalls += 1;
+    if (/official outcome/i.test(prompt)) throw new Error("finalizer timed out"); // the synthesis/finalizer turn
+    if (claudeCalls === 1) return providerResult("Claude opening");
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [] }));
+  });
+  t.mock.method(provider("codex"), "run", async () => {
+    codexCalls += 1;
+    if (codexCalls === 1) return providerResult("Codex opening");
+    return providerResult(versionedControl({ goalStatus: "satisfied", itemProposals: [] }));
+  });
+
+  try {
+    await runOrchestration(session.id, {
+      mode: "collaboration",
+      rounds: 2,
+      content: "Finish and summarize",
+      finalizer: "claude",
+      agents: { claude: { enabled: true, role: "Collaborator" }, codex: { enabled: true, role: "Collaborator" } },
+    }, () => {});
+
+    const saved = await getSession(session.id);
+    assert.equal(saved.status, "completed"); // NOT error — the finalizer only explains the outcome
+    assert.ok(saved.messages.some((message) => message.meta?.outcome), "the deterministic outcome is preserved");
+    const note = saved.messages.find((message) => message.meta?.finalizerFailed);
+    assert.ok(note, "a finalizer-failure note is recorded");
+    assert.match(note.meta.providerWarning, /finalizer timed out/);
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
 test("a stale target version gets one narrow repair", async (t) => {
   const session = await createSession("target-version-repair");
   let claudeCalls = 0;

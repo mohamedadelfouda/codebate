@@ -7,7 +7,7 @@ import { assertTrustedProject, projectSnapshot } from "./project.js";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { CappedText } from "./output-limits.js";
-import { logError, redact } from "./logger.js";
+import { logError, logWarn, redact } from "./logger.js";
 import { registerProjectScope } from "./project-tools.js";
 import { claimSessionActivity } from "./session-activity.js";
 import { expectedApiError } from "./api-errors.js";
@@ -829,6 +829,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
     let itemRegistry = [];
     let lastAssessment = null;
     let officialOutcome = null;
+    let finalizerFailed = null;
     let proposalVersion = 1;
     // Per-round diagnostics: why each round continued (or stopped) and who changed the proposal. Recorded
     // for every assessed round so a run is diagnosable from its outcome/export, not only the final state.
@@ -1001,7 +1002,26 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         projectSnapshot: projSnapshot,
         outcome: officialOutcome,
       });
-      await callAgent(finalizer, prompt, completedRounds + 1, "synthesis");
+      try {
+        await callAgent(finalizer, prompt, completedRounds + 1, "synthesis");
+      } catch (finalizerError) {
+        // The finalizer only EXPLAINS the already-persisted official outcome — it never decides it. So its
+        // failure must NOT turn a completed discussion into an errored session: record the failure and
+        // complete the run on the deterministic outcome (the source of truth). A genuine cancellation
+        // mid-finalizer still stops the run.
+        if (runWasCancelled(state)) throw finalizerError;
+        finalizerFailed = redact(finalizerError?.message || String(finalizerError));
+        logWarn("finalizer failed; completing on the official outcome", finalizerFailed);
+        const noteMessage = makeMessage({
+          author: "system",
+          content: "The final summary couldn't be generated, so the official outcome above stands.",
+          phase: "synthesis",
+          mode,
+        });
+        noteMessage.meta = { finalizerFailed: true, providerWarning: finalizerFailed };
+        session.messages.push(noteMessage);
+        await persistRunProgress(session, state, emit).catch(() => {});
+      }
     }
 
     const terminalStatus = runWasCancelled(state) ? "stopped" : "completed";
