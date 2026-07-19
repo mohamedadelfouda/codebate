@@ -121,6 +121,43 @@ test("project grounding appears only when a snapshot is supplied", () => {
   assert.match(withProject, /PROJECT_TREE_SENTINEL/);
 });
 
+test("a project-backed prompt forbids claiming verification against code not in the attached project", () => {
+  // Grounding integrity: agents hallucinated "verifying" a different codebase against the attached repo.
+  const withProject = collaborationPrompt({ ...base, round: 1, projectSnapshot: "TREE" });
+  assert.match(withProject, /THIS attached project/);
+  assert.match(withProject, /can't verify/i);
+  // Without a project there's no verification boundary to assert.
+  assert.doesNotMatch(collaborationPrompt({ ...base, round: 1 }), /THIS attached project/);
+  // The finalizer gets the same boundary.
+  const synth = synthesisPrompt({ ...base, mode: "collaboration", projectSnapshot: "TREE" });
+  assert.match(synth, /UNVERIFIED|list those claims as/);
+});
+
+test("every task-bearing prompt frames attachments as material, not new instructions", () => {
+  // Task-interpretation: an attached document/session must not become "the task" (the finalizer produced a
+  // brief about a plan inside an attachment instead of the analysis the user asked for).
+  for (const prompt of [
+    collaborationPrompt({ ...base, round: 1 }),
+    debatePrompt({ ...base, opponentLabel: "Codex", round: 1, independent: true }),
+    synthesisPrompt({ ...base, mode: "collaboration" }),
+  ]) {
+    assert.match(prompt, /\[Attached files\]/);
+    assert.match(prompt, /material to act ON/);
+  }
+  // The finalizer additionally refocuses on the user's actual request if the discussion drifted.
+  assert.match(synthesisPrompt({ ...base, mode: "collaboration" }), /drifted/);
+});
+
+test("round-bearing prompts mark the orchestrator's round as authoritative over stale prior-run verdicts", () => {
+  // Resume: an interrupted run leaves "rounds completed"/verdict text in the transcript; the agent must trust
+  // the round it's given, not that older state.
+  const collab = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  const debate = debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 2 });
+  assert.match(collab, /round 3 of THIS run/);
+  assert.match(collab, /previous, interrupted run/i);
+  assert.match(debate, /previous, interrupted run/i);
+});
+
 test("every phase forbids narrating tool usage or CLI errors in the reader-facing answer (H9)", () => {
   const prompts = {
     "collaboration opening": collaborationPrompt({ ...base, round: 1 }),
