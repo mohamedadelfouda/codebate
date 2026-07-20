@@ -20,7 +20,12 @@ const CONTENT_RULES = [
   { rule: "private-key", severity: "critical", re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/ },
   { rule: "aws-access-key-id", severity: "critical", re: /\bAKIA[0-9A-Z]{16}\b/ },
   { rule: "github-token", severity: "critical", re: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/ },
-  { rule: "openai-key", severity: "critical", re: /\bsk-[A-Za-z0-9_-]{20,}\b/ },
+  // Anthropic keys (sk-ant-…) must be caught under their own label, and the generic OpenAI rule below
+  // excludes the ant- prefix so a single key isn't double-reported and mislabeled as an OpenAI key. The
+  // anthropic floor is {16,} after "sk-ant-" so the two rules' UNION still covers everything the old single
+  // /sk-[A-Za-z0-9_-]{20,}/ caught (20 chars after "sk-" == 16 after "sk-ant-") — no coverage gap.
+  { rule: "anthropic-key", severity: "critical", re: /\bsk-ant-[A-Za-z0-9_-]{16,}\b/ },
+  { rule: "openai-key", severity: "critical", re: /\bsk-(?!ant-)[A-Za-z0-9_-]{20,}\b/ },
   { rule: "slack-token", severity: "high", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
   { rule: "google-api-key", severity: "high", re: /\bAIza[0-9A-Za-z_-]{35}\b/ },
   { rule: "aws-secret-key", severity: "high", re: /aws_secret_access_key\s*[=:]\s*['"]?[A-Za-z0-9/+]{40}/i },

@@ -54,6 +54,38 @@ after(async () => {
   await fs.rm(projectDir, { recursive: true, force: true });
 });
 
+test("a malformed JSON body is 400 and an oversized body is 413 (not a generic 500)", async () => {
+  // Raw fetch (not the JSON.stringify helper) so we can send an intentionally broken / huge body.
+  const malformed = await fetch(`${origin}/api/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie, Origin: origin },
+    body: "{ not valid json",
+  });
+  assert.equal(malformed.status, 400);
+  assert.equal((await malformed.json()).code, "invalid_json");
+
+  const oversize = await fetch(`${origin}/api/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie, Origin: origin },
+    body: `{"title":"${"x".repeat(1_000_001)}"}`,
+  });
+  assert.equal(oversize.status, 413);
+  assert.equal((await oversize.json()).code, "request_too_large");
+});
+
+test("a UTF-8 body split by the client is decoded intact (Arabic round-trips)", async () => {
+  // Send raw UTF-8 bytes for an Arabic title; readJson must concat bytes before decoding, so the title
+  // comes back byte-identical rather than corrupted with replacement chars.
+  const title = "تقييم الموقع — عدسات لاصقة 🚀";
+  const created = await fetch(`${origin}/api/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie, Origin: origin },
+    body: Buffer.from(JSON.stringify({ title }), "utf8"),
+  });
+  assert.equal(created.status, 201);
+  assert.equal((await created.json()).title, title);
+});
+
 test("project validation keeps the legacy message and exposes a stable code", async () => {
   const response = await post(`/api/sessions/${sessionId}/project`, { path: "" });
   const payload = await response.json();

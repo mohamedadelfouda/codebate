@@ -4,6 +4,7 @@ import { scanForSecrets, hasBlockingSecrets } from "../../server/secret-scan.js"
 
 const credentialFixtures = {
   openai: ["sk", "-abcdefghij1234567890xyz"].join(""),
+  anthropic: ["sk", "-ant-abcdefghij1234567890xyz"].join(""),
   github: ["gh", "p_abcdefghijklmnopqrstuvwxyz0123"].join(""),
   awsAccessKey: ["AK", "IAIOSFODNN7EXAMPLE"].join(""),
   google: ["AI", "za", "B".repeat(35)].join(""),
@@ -59,4 +60,23 @@ test("clean files produce no findings", () => {
   const f = scanForSecrets([{ path: "src/app.js", content: "export const x = 1;\nconsole.log(x);" }]);
   assert.deepEqual(f, []);
   assert.equal(hasBlockingSecrets(f), false);
+});
+
+test("an Anthropic key is labeled anthropic-key and NOT double-reported as openai-key", () => {
+  const f = scanForSecrets([{ path: "cfg", content: `ANTHROPIC_API_KEY=${credentialFixtures.anthropic}` }]);
+  assert.ok(f.some((x) => x.rule === "anthropic-key" && x.severity === "critical"));
+  assert.ok(!f.some((x) => x.rule === "openai-key")); // the generic rule excludes the ant- prefix
+});
+
+test("an OpenAI key still matches openai-key and not anthropic-key", () => {
+  const f = scanForSecrets([{ path: "cfg", content: `OPENAI_API_KEY=${credentialFixtures.openai}` }]);
+  assert.ok(f.some((x) => x.rule === "openai-key"));
+  assert.ok(!f.some((x) => x.rule === "anthropic-key"));
+});
+
+test("a short sk-ant- key the old single rule caught is still flagged (no coverage gap from the rule split)", () => {
+  // 16 chars after "sk-ant-" == 20 after "sk-", the old /sk-[..]{20,}/ floor. Security review caught that a
+  // {20,} anthropic floor would silently miss this band.
+  const shortAnt = ["sk", "-ant-abcdefghij123456"].join("");
+  assert.ok(scanForSecrets([{ path: "cfg", content: `KEY=${shortAnt}` }]).some((x) => x.rule === "anthropic-key"));
 });
