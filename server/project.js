@@ -29,8 +29,16 @@ export async function projectIdentity(projectPath) {
   }
   const commonDir = await git(["rev-parse", "--git-common-dir"], realPath);
   const gitPath = commonDir ? await fs.realpath(path.resolve(realPath, commonDir)) : "";
+  // Bind the fingerprint to the git directory's on-disk INSTANCE (device + inode), not just its path. Without
+  // this, replacing the repo at the same path (delete .git, recreate it, re-add the same origin) reproduces an
+  // identical path/gitPath/remote and would silently inherit remembered trust for unrelated content. A fresh
+  // directory gets a new inode, so the fingerprint changes and trust is correctly re-requested.
+  let gitInstance = "";
+  if (gitPath) {
+    try { const stat = await fs.stat(gitPath, { bigint: true }); gitInstance = `${stat.dev}:${stat.ino}`; } catch {}
+  }
   const remote = await git(["remote", "get-url", "origin"], realPath);
-  const fingerprint = crypto.createHash("sha256").update(JSON.stringify({ realPath, gitPath, remote })).digest("hex");
+  const fingerprint = crypto.createHash("sha256").update(JSON.stringify({ realPath, gitPath, gitInstance, remote })).digest("hex");
   // `remote` is exposed so callers can tell a STRONG identity (a git repo with a real origin) from a weak one
   // (a non-git folder or a remote-less repo, whose fingerprint is essentially path-only). Trust memory is only
   // safe to persist/auto-apply for strong identities — a reused path must never silently re-trust new content.

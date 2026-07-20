@@ -2004,9 +2004,12 @@ async function attachProject() {
   try {
     const r = await api(`/api/sessions/${requestedId}/project`, { method: "POST", body: JSON.stringify({ path: p }) });
     if (!isCurrentSessionView(requestedId, requestedEpoch)) return;
-    st.textContent = t("untrustedProject");
+    // A project the user trusted before comes back already-trusted (server remembered the consent) — reflect
+    // that immediately instead of asking to trust it again until a later reload.
+    const trusted = r.project?.trusted === true;
+    st.textContent = trusted ? t("attached") : t("untrustedProject");
     st.className = "run-state";
-    $("trustProject").hidden = false;
+    $("trustProject").hidden = trusted;
     if (currentSession) currentSession.project = r.project;
   } catch (e) { if (isCurrentSessionView(requestedId, requestedEpoch)) st.textContent = localizedFailure(e); }
 }
