@@ -31,6 +31,17 @@ test("sandbox mode is per-platform (disabled on Windows, enabled elsewhere) and 
   assert.deepEqual(mac.slice(mac.indexOf("--sandbox"), mac.indexOf("--sandbox") + 2), ["--sandbox", "enabled"]);
 });
 
+test("web (chat) mode drops the OS sandbox on every platform so the reviewer can reach the network", () => {
+  // Web is only enabled when no project is attached (orchestrator gates webOnly on !useProject), so the run
+  // is in an empty scratch cwd — dropping the sandbox exposes only that dir. Non-web keeps the mac/Linux sandbox.
+  for (const platform of ["darwin", "linux", "win32"]) {
+    const web = buildCursorReviewArgs({ descriptor, model: "", platform, web: true });
+    assert.deepEqual(web.slice(web.indexOf("--sandbox"), web.indexOf("--sandbox") + 2), ["--sandbox", "disabled"], `web sandbox on ${platform}`);
+  }
+  const macReview = buildCursorReviewArgs({ descriptor, model: "", platform: "darwin", web: false });
+  assert.deepEqual(macReview.slice(macReview.indexOf("--sandbox"), macReview.indexOf("--sandbox") + 2), ["--sandbox", "enabled"], "non-web review stays sandboxed on macOS");
+});
+
 test("parseCursorResult reads the single json result object and fails closed on junk", () => {
   const ok = parseCursorResult('{"type":"result","subtype":"success","is_error":false,"result":"the review","session_id":"s1"}');
   assert.equal(ok.result, "the review");

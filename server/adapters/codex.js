@@ -140,9 +140,13 @@ function isolatedCodexConfig(cwd, projectRoot, permission) {
     .map((root) => `[projects.${JSON.stringify(root)}]\ntrust_level = "${trustLevel}"`)
     .join("\n\n");
   const features = DISABLED_CODEX_FEATURES.map((feature) => `${feature} = false`).join("\n");
+  // Web search follows the permission: only chat (the project-less, web-enabled mode) turns it live. This
+  // agrees with the `-c web_search=...` CLI override in codexSecurityOverrides so the isolated config and
+  // the launch flag never disagree; execute/review/planning stay "disabled".
+  const webSearch = permission === "chat" ? "live" : "disabled";
   return [
     "check_for_update_on_startup = false",
-    'web_search = "disabled"',
+    `web_search = "${webSearch}"`,
     "mcp_servers = {}",
     "",
     "[features]",
