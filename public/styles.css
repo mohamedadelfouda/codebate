@@ -319,7 +319,7 @@ textarea { resize: none; line-height: 1.55; }
 .live-actor strong { display: block; font-size: 12px; }
 .live-actor span { display: block; color: var(--faint); font-size: 11px; margin-top: 2px; }
 
-.agent-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.agent-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: start; }
 .dcard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .dcard-head { padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line-soft); }
 .dcard.claude .dcard-head { background: linear-gradient(90deg, color-mix(in srgb, var(--claude) 18%, transparent), transparent); }
