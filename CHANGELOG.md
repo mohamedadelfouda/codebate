@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.3 — 2026-07-20
+
+- Web search now works in Chat for **all three** providers, not just Claude: Codex and Cursor can search the web too, so a research task no longer gets real data from one provider and "web access is not available" from the others. Web stays scoped to project-less Chat by design.
+- Sessions stop honestly instead of burning rounds. Later collaboration/debate rounds are asked to **confirm or genuinely disagree**, not to manufacture a marginal change every round; and when a task needs live web (unavailable in the collaborative modes), the agents say so in one turn and point you to Chat instead of re-stating it each round.
+- When one provider's `<agent-control>` block is unreadable and no valid majority can seal — e.g. only one readable voice remains after another provider dropped — the session now stops with an honest **degraded** outcome ("agreed, but not formally sealed — <provider>'s control was unreadable") instead of running to the round limit. It never seals on a single voice.
+- Language lock: each provider is told the user's **detected** language explicitly and reminded again at the very end of the prompt, so an agent (Codex especially) stops drifting to English partway through an Arabic discussion. Detection reads the user's own instruction, not attached file text.
+- The decision brief now **leads with the answer**: a bottom line, confirmed findings, then a plan split into independent-now steps versus decision-gated ones (a pending decision no longer holds up work that doesn't depend on it). A review that ran no code is labeled a **static** review, and the session mechanics move to a brief closing note.
+- Request-handling hardening: JSON bodies are byte-buffered and decoded once, so an Arabic body split across network chunks is no longer corrupted; an oversize body is a **413** and malformed JSON a **400** (were a generic 500); a malformed `Host` header returns a clean **400** instead of hanging the request; and the secret scanner labels Anthropic keys (`sk-ant-…`) under their own rule instead of the misleading `openai-key`.
+- API robustness: an event stream for a session that doesn't exist is a **404** (instead of a stream that heartbeats forever), with a per-session stream cap; accepting/rejecting a missing or already-decided execution returns **404**/**409**; and deleting a session blocked by a pending connector action reports its own code so the client can tell it apart from a pending execution.
+- The provider decision cards and the round summary show the **full** agent text instead of truncating it (and the cards no longer stretch to the tallest one).
+- Internal: a session-replay test harness turns reported real sessions into deterministic, offline convergence regression tests, so most engine fixes are verified without a live provider run.
+
 ## 0.2.2 — 2026-07-20
 
 - Follow-up messages no longer lose the plan: the shared transcript pins the original task, the current round's full proposals, and the latest agreed outcome, and compacts in chronological order, so a "modify the plan" turn keeps the plan instead of drifting to a different subject. Each provider gets a transcript budget sized to its own context window.
