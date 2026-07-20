@@ -1,7 +1,7 @@
 {
   "name": "codebate",
   "productName": "Codebate",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "Local workspace where coding agents challenge, review, and converge — while you stay in control.",
   "author": "Mohamed Adel Fouda",
