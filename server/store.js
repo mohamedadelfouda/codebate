@@ -675,7 +675,7 @@ export async function deleteSession(id, { isBusy } = {}) {
     }
     if (Array.isArray(session.connectorActions) && session.connectorActions.some((record) => ["pending", "executing_unknown"].includes(record.status))) {
       const error = new Error("Resolve pending connector actions before deleting the session");
-      error.code = "pending_execution_decisions";
+      error.code = "pending_connector_actions";
       throw error;
     }
     await fs.rm(filePath, { force: true });

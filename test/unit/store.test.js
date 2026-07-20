@@ -387,7 +387,7 @@ for (const activeStatus of ['pending', 'executing_unknown']) {
     try {
       session.connectorActions = [{ id: 'a1', connector: 'gmail', action: 'send_message', status: activeStatus }];
       await saveSession(session);
-      await assert.rejects(() => deleteSession(session.id), (error) => error.code === 'pending_execution_decisions');
+      await assert.rejects(() => deleteSession(session.id), (error) => error.code === 'pending_connector_actions');
       const loaded = await getSession(session.id);
       assert.equal(loaded.id, session.id);
     } finally {

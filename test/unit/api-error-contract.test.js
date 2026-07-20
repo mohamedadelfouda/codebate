@@ -107,6 +107,27 @@ test("pending execution conflict returns 409 with a stable code", async () => {
   assert.equal(payload.detail, payload.error);
 });
 
+test("an SSE stream for a missing session is a 404, not an endlessly heartbeating stream", async () => {
+  const response = await get("/api/sessions/00000000000000000000000000000000/events");
+  assert.equal(response.status, 404);
+  assert.equal((await response.json()).code, "not_found");
+});
+
+test("accepting a missing execution is a 404 (not a generic 400)", async () => {
+  const response = await post(`/api/sessions/${sessionId}/execution/no-such-task/accept`, { action: "merge" });
+  assert.equal(response.status, 404);
+  assert.equal((await response.json()).code, "execution_not_found");
+});
+
+test("deleting a session blocked by a pending connector action is a 409 with its own code", async () => {
+  const created = await post("/api/sessions", { title: "Connector delete" });
+  const id = (await created.json()).id;
+  await mutateSession(id, (session) => { session.connectorActions = [{ id: "a1", status: "pending" }]; });
+  const response = await fetch(`${origin}/api/sessions/${id}`, { method: "DELETE", headers: { Cookie: cookie, Origin: origin } });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).code, "pending_connector_actions");
+});
+
 test("connector routes distinguish invalid, conflicting, and unavailable requests", async () => {
   const created = await post("/api/sessions", { title: "Connector contract" });
   const connectorSessionId = (await created.json()).id;
