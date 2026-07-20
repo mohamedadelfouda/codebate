@@ -28,8 +28,10 @@ function block(overrides = {}) {
 }
 const control = (overrides = {}) => parseAgentControl(block(overrides));
 // A provider whose turn produced no parseable <agent-control> block this round (e.g. Cursor
-// missing_control, or a provider that drifted to free prose). validateRound filters it out.
-const missing = null;
+// missing_control, or a provider that drifted to free prose). This is the REAL orchestrator path:
+// parseAgentControl on prose returns a present-but-invalid control object ({valid:false,
+// errorCodes:["missing_control"]}) — NOT a null slot — so it counts toward the participant total.
+const missingControl = () => parseAgentControl("reader-facing prose with no agent-control block");
 const create = (kind, text, actor, action) => ({ action: "create", kind, text, requiredStep: { actor, action } });
 
 // Assess one decisive round through the real engine.
@@ -76,16 +78,30 @@ test("scenario · late substantive change: waits one confirmation round, then th
   assert.equal(exhausted.canStop, true);
 });
 
-// ── Scenarios awaiting their fix (added when the corresponding engine PR lands) ──────────────
-// · repo-review missing_control: a valid majority converged but ONE provider (Cursor) produced no
-//   parseable control, so the round can't certify and agreementState is "unknown" despite real
-//   agreement — the session runs to the round limit. The quorum path today requires every provider
-//   present, so it does not yet rescue a MISSING control (only a malformed one). The fix + its
-//   `assess([control(), control(), missing])` scenario land together in the missing-control PR.
-test("scenario · repo-review missing_control (CURRENT behaviour, pre-fix): one missing control blocks the seal", () => {
-  // Characterization test: documents today's gap so the fix PR flips it deliberately, not by accident.
-  const r = assess([control(), control(), missing]);
+// Scenario — repo review, THREE providers present, two converged and one produced an unparseable
+// control. The quorum path already rescues this: the round seals on the valid majority (the excluded
+// control is surfaced honestly). Locks in that a single malformed/missing control among three does NOT
+// sink a real agreement.
+test("scenario · three-way with one unparseable control: seals on the valid majority (quorum)", () => {
+  const r = assess([control(), control(), missingControl()]);
+  assert.equal(r.agreementState, "converged");
+  assert.equal(r.canStop, true);
+  assert.equal(r.sealedOnQuorum, true);
+});
+
+// Scenario — the ACTUAL repo-review failure. Codex hit its usage limit and dropped after round 1, so
+// later rounds ran with only two providers; Cursor's control was unparseable (missing_control). That
+// leaves just ONE valid control — which correctly cannot seal (quorum never seals on a single voice) —
+// so the round is invalid_control and the session burns to the round limit despite the two readable
+// participants effectively agreeing in prose.
+//
+// CURRENT behaviour (characterization): no seal, and it keeps going. The right fix is NOT to seal on one
+// voice; it is an honest, bounded DEGRADED early-stop (ChatGPT's substantive_convergence) so the session
+// stops with a truthful "couldn't formally seal — one control unreadable" outcome instead of looping.
+// The degraded-seal PR flips the assertions below.
+test("scenario · two agents after a dropout, one unparseable control (CURRENT, pre-fix): cannot seal → burns rounds", () => {
+  const r = assess([control(), missingControl()]);
   assert.equal(r.canStop, false);
   assert.equal(r.agreementState, "unknown");
-  assert.equal(r.sealedOnQuorum, false);
+  assert.equal(r.stopReason, "invalid_control");
 });
