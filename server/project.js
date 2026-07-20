@@ -39,10 +39,11 @@ export async function projectIdentity(projectPath) {
   }
   const remote = await git(["remote", "get-url", "origin"], realPath);
   const fingerprint = crypto.createHash("sha256").update(JSON.stringify({ realPath, gitPath, gitInstance, remote })).digest("hex");
-  // `remote` is exposed so callers can tell a STRONG identity (a git repo with a real origin) from a weak one
-  // (a non-git folder or a remote-less repo, whose fingerprint is essentially path-only). Trust memory is only
-  // safe to persist/auto-apply for strong identities — a reused path must never silently re-trust new content.
-  return { realPath, fingerprint, remote };
+  // `gitInstance` is exposed as the STRONG-IDENTITY signal: a real git repo whose on-disk .git instance we
+  // could resolve. Only a strong identity is safe to remember/auto-apply trust for — a non-git or unresolvable
+  // folder has an essentially path-only fingerprint, so a reused path could otherwise silently re-trust new
+  // content. Callers gate BOTH the save (remember) and the restore (auto-apply) on this same condition.
+  return { realPath, fingerprint, gitInstance };
 }
 
 export async function assertTrustedProject(session) {
