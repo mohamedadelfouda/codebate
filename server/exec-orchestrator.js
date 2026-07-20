@@ -496,9 +496,9 @@ export async function acceptExecution(sessionId, taskId, action = "merge") {
     const acceptingStatus = action === "pr" ? "accepting_pr" : "accepting_merge";
     const claim = await mutateSession(sessionId, async (session) => {
       const rec = findExecution(session, taskId);
-      if (!rec) throw new Error("Execution not found");
-      if (!["awaiting_user", retryableStatus, acceptingStatus].includes(rec.status)) throw new Error(`Execution already ${rec.status}`);
-      if (rec.decision && rec.decision !== action) throw new Error(`Execution was already accepted for ${rec.decision}`);
+      if (!rec) throw expectedApiError("execution_not_found", "Execution not found", 404);
+      if (!["awaiting_user", retryableStatus, acceptingStatus].includes(rec.status)) throw expectedApiError("execution_already_decided", `Execution already ${rec.status}`, 409);
+      if (rec.decision && rec.decision !== action) throw expectedApiError("execution_already_decided", `Execution was already accepted for ${rec.decision}`, 409);
       if (!rec.worktree?.approval) throw new Error("This execution predates the secure acceptance format; run the task again");
       if (!rec.projectPath || !rec.projectFingerprint) throw new Error("This execution predates project identity binding; run the task again");
       if (!rec.reviewedTree) throw new Error("This execution predates reviewed-tree binding; run the task again");
@@ -614,8 +614,8 @@ export async function rejectExecution(sessionId, taskId) {
   return withDecisionLock(sessionId, taskId, async () => {
     const claim = await mutateSession(sessionId, (session) => {
       const rec = findExecution(session, taskId);
-      if (!rec) throw new Error("Execution not found");
-      if (!["awaiting_user", "rejected_cleanup_pending"].includes(rec.status)) throw new Error(`Execution already ${rec.status}`);
+      if (!rec) throw expectedApiError("execution_not_found", "Execution not found", 404);
+      if (!["awaiting_user", "rejected_cleanup_pending"].includes(rec.status)) throw expectedApiError("execution_already_decided", `Execution already ${rec.status}`, 409);
       rec.status = "rejecting";
       rec.decision = "reject";
       if (!rec.decidedAt) {

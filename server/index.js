@@ -170,6 +170,9 @@ const PUBLIC_DIR = path.resolve(__dirname, "../public");
 const PORT = Number(process.env.PORT || 3210);
 let activePort = PORT;
 const clients = new Map();
+// Cap concurrent SSE streams per session so a caller can't open unbounded streams (each holds a socket
+// + heartbeat interval). A few browser tabs is the normal case; 8 is generous headroom.
+const MAX_SSE_CLIENTS_PER_SESSION = 8;
 
 function json(res, status, data) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...securityHeaders() });
@@ -204,6 +207,10 @@ function emit(sessionId, event) {
 }
 
 function addSseClient(sessionId, req, res) {
+  const existing = clients.get(sessionId);
+  if (existing && existing.size >= MAX_SSE_CLIENTS_PER_SESSION) {
+    return json(res, 429, apiErrorPayload("too_many_streams", "Too many open event streams for this session"));
+  }
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
@@ -364,6 +371,9 @@ const server = http.createServer(async (req, res) => {
         if (error.code === "pending_execution_decisions") {
           return json(res, 409, apiErrorPayload("pending_execution_decisions", error));
         }
+        if (error.code === "pending_connector_actions") {
+          return json(res, 409, apiErrorPayload("pending_connector_actions", error));
+        }
         if (error.code === "ENOENT" || /ENOENT|no such file/i.test(String(error.message))) {
           return json(res, 404, apiErrorPayload("not_found", error));
         }
@@ -371,6 +381,12 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (parts[0] === "api" && parts[1] === "sessions" && parts[2] && parts[3] === "events" && req.method === "GET") {
+      // Don't open a stream for a session that doesn't exist (it would just sit there heartbeating forever).
+      try { await getSession(parts[2]); }
+      catch (error) {
+        if (error.code === "ENOENT" || /ENOENT|no such file/i.test(String(error.message))) return json(res, 404, apiErrorPayload("not_found", "Session not found"));
+        throw error;
+      }
       return addSseClient(parts[2], req, res);
     }
     if (parts[0] === "api" && parts[1] === "sessions" && parts[2] && parts[3] === "connectors" && req.method === "GET") {
@@ -517,12 +533,12 @@ const server = http.createServer(async (req, res) => {
       if (!startupReconciled) return json(res, 503, apiErrorPayload("startup_recovery_pending", "Startup recovery is still running; retry in a moment"));
       const body = await readJson(req);
       try { return json(res, 200, await acceptExecution(parts[2], parts[4], body.action || "merge")); }
-      catch (e) { return json(res, 400, apiErrorPayload("execution_accept_failed", e)); }
+      catch (e) { return json(res, e.apiStatus || 400, apiErrorPayload(e.apiCode || "execution_accept_failed", e)); }
     }
     if (parts[0] === "api" && parts[1] === "sessions" && parts[2] && parts[3] === "execution" && parts[4] && parts[5] === "reject" && req.method === "POST") {
       if (!startupReconciled) return json(res, 503, apiErrorPayload("startup_recovery_pending", "Startup recovery is still running; retry in a moment"));
       try { return json(res, 200, await rejectExecution(parts[2], parts[4])); }
-      catch (e) { return json(res, 400, apiErrorPayload("execution_reject_failed", e)); }
+      catch (e) { return json(res, e.apiStatus || 400, apiErrorPayload(e.apiCode || "execution_reject_failed", e)); }
     }
     if (req.method === "GET" && url.pathname === "/api/agents/status") {
       return json(res, 200, await detectAgents());
