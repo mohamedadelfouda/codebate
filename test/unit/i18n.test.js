@@ -118,6 +118,16 @@ test("discussionOutcomeReport renders the structured outcome in the reader's lan
   assert.match(discussionOutcomeReport(onQuorum, "en").text, /Sealed on the majority.*Cursor/);
   assert.match(discussionOutcomeReport(onQuorum, "ar").text, /الأغلبية.*Cursor/);
 
+  // A degraded stop (no formal seal — one control unreadable, e.g. one readable voice after a dropout) says
+  // so plainly and names the unreadable participant, in the reader's language — never "the task is complete".
+  const degraded = {
+    outcomeVersion: 1, phase: "converged", completedRounds: 4, stoppedEarly: true, sealDegraded: true,
+    roundDiagnostics: [{ round: 4, controlFailures: [{ agent: "cursor" }] }],
+  };
+  assert.match(discussionOutcomeReport(degraded, "en").text, /wasn't formally sealed.*Cursor/);
+  assert.doesNotMatch(discussionOutcomeReport(degraded, "en").text, /task is complete/);
+  assert.match(discussionOutcomeReport(degraded, "ar").text, /مش مختوم رسميًا.*Cursor/);
+
   const early = { outcomeVersion: 1, phase: "converged", completedRounds: 2, stoppedEarly: true };
   assert.match(discussionOutcomeReport(early, "en").text, /remaining rounds were stopped/);
 

@@ -175,6 +175,23 @@ export function discussionOutcomeReport(outcome, language = "ar") {
   const pendingItems = Array.isArray(outcome.pendingItems) ? outcome.pendingItems.map((item) => item.text) : [];
 
   if (outcome.phase === "converged") {
+    // Provider(s) whose control blocked certification in the final round — reused by both the degraded and
+    // quorum notes below. Kept in sync with server/orchestrator.js controlBlameLine.
+    const diagnostics = Array.isArray(outcome.roundDiagnostics) ? outcome.roundDiagnostics : [];
+    const failures = (diagnostics.length && Array.isArray(diagnostics[diagnostics.length - 1].controlFailures))
+      ? diagnostics[diagnostics.length - 1].controlFailures : [];
+    const names = [...new Set(failures.map((failure) => failure && failure.agent).filter(Boolean))]
+      .map((agent) => agent.charAt(0).toUpperCase() + agent.slice(1));
+    // Degraded stop: no formal seal (a control was unreadable and no majority could certify — e.g. only one
+    // readable voice after a dropout), so the session stopped honestly once the readable side converged
+    // rather than looping to the round limit. Say so plainly instead of claiming a completed agreement.
+    if (outcome.sealDegraded) {
+      const who = names.length ? names.join(en ? ", " : "، ") : (en ? "one participant" : "أحد المشاركين");
+      const text = en
+        ? `The readable agents agreed at round ${round}, but the agreement wasn't formally sealed: ${who}'s control couldn't be read, so its actual position is unknown. Stopped here instead of running out the rounds with nothing new.`
+        : `الوكلاء المقروئون اتفقوا في الجولة ${round}، لكن الاتفاق مش مختوم رسميًا: بيانات التحكم من ${who} ماكانتش مقروءة وموقفها الفعلي غير معروف. وقفنا هنا بدل ما نكمّل الجولات من غير جديد.`;
+      return { text, items: pendingItems };
+    }
     const text = outcome.stoppedEarly
       ? (en ? `The agents agreed and the task is complete at round ${round} — the remaining rounds were stopped.`
             : `الوكلاء اتفقوا والمهمة اكتملت في الجولة ${round} — تم إيقاف الجولات المتبقية.`)
@@ -183,17 +200,10 @@ export function discussionOutcomeReport(outcome, language = "ar") {
     // Honest quorum note: the agreement was sealed on the valid MAJORITY because a provider's control block
     // couldn't be certified. Name the excluded provider(s), mirroring the server report.
     let quorum = "";
-    if (outcome.sealedOnQuorum) {
-      const diagnostics = Array.isArray(outcome.roundDiagnostics) ? outcome.roundDiagnostics : [];
-      const failures = (diagnostics.length && Array.isArray(diagnostics[diagnostics.length - 1].controlFailures))
-        ? diagnostics[diagnostics.length - 1].controlFailures : [];
-      const names = [...new Set(failures.map((failure) => failure && failure.agent).filter(Boolean))]
-        .map((agent) => agent.charAt(0).toUpperCase() + agent.slice(1));
-      if (names.length) {
-        quorum = en
-          ? ` (Sealed on the majority — ${names.join(", ")}'s control couldn't be read and was excluded; its actual position is unknown.)`
-          : ` (اتختم على الأغلبية — بيانات التحكم من ${names.join("، ")} ماتعتمدتش واستُبعدت، وموقفها الفعلي غير معروف.)`;
-      }
+    if (outcome.sealedOnQuorum && names.length) {
+      quorum = en
+        ? ` (Sealed on the majority — ${names.join(", ")}'s control couldn't be read and was excluded; its actual position is unknown.)`
+        : ` (اتختم على الأغلبية — بيانات التحكم من ${names.join("، ")} ماتعتمدتش واستُبعدت، وموقفها الفعلي غير معروف.)`;
     }
     return { text: text + quorum, items: [] };
   }

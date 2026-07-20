@@ -31,6 +31,10 @@ const MAX_ROLE_CODEPOINTS = 180;
 // still self-reporting a marginal substantiveDelta. Bounded so over-signalling can't burn every round, but ≥2
 // so a GENUINE late change gets at least one round to reach the parallel peers before the loop stops.
 const MAX_CONFIRMATION_ROUNDS = 2;
+// A round can fail to seal only because one participant's control is unreadable/unrepairable (not a real
+// disagreement) while every readable control converged. Rather than burn to the round limit, stop honestly
+// once that condition has persisted this many CONSECUTIVE rounds — a degraded (not formal) seal.
+const DEGRADED_STOP_ROUNDS = 2;
 const CONTROL_REPAIR_TIMEOUT_MS = 60000;
 const MAX_CONTROL_REPAIR_OUTPUT_BYTES = 64 * 1024;
 const MAX_CONTROL_SNAPSHOT_BYTES = 5000;
@@ -294,6 +298,10 @@ function lastSubstantiveAnswer(session, limit = 4000) {
 }
 
 function discussionOutcomePhase(assessment) {
+  // A degraded stop IS an agreement among the readable participants (one control was unreadable, so the
+  // formal seal failed). Present it as converged; the sealDegraded flag + the report layer add the honest
+  // caveat and name the excluded participant.
+  if (assessment.degradedStop) return "converged";
   if (!assessment.canStop) return "needs_more_rounds";
   // Keyed off the stop reason, not raw completion: an agreed answer that still needs the user
   // or an outside check stops on agreement (the deterministic core cleared it — no agent work
@@ -315,10 +323,12 @@ export function buildDiscussionOutcome(assessment, requestedRounds, completedRou
     completionState: assessment.completionState,
     stopReason: assessment.canStop
       ? assessment.stopReason
-      : assessment.stopReason === "invalid_control" ? "invalid_control" : "round_limit",
+      : assessment.degradedStop ? "degraded_convergence"
+        : assessment.stopReason === "invalid_control" ? "invalid_control" : "round_limit",
+    sealDegraded: assessment.degradedStop === true,
     requestedRounds,
     completedRounds,
-    stoppedEarly: assessment.canStop && completedRounds < requestedRounds,
+    stoppedEarly: (assessment.canStop || assessment.degradedStop) && completedRounds < requestedRounds,
     itemRegistry: structuredClone(assessment.itemRegistry),
     pendingItems: structuredClone(assessment.pendingItems),
     pendingKinds: [...assessment.pendingKinds],
@@ -348,7 +358,11 @@ function terminalOutcomeReport(outcome) {
     // `satisfied` (the agents ran out of substantive work and no agent step is pending), so
     // don't claim the task is complete unless it actually is.
     const settledOnly = outcome.completionState !== "satisfied";
-    const head = settledOnly ? "الوكلاء اتفقوا واستقرّوا على إجابة واحدة" : "الوكلاء اتفقوا والمهمة اكتملت";
+    // A degraded stop is NOT a formal seal: the readable participants agreed but one control was unreadable,
+    // so say that plainly rather than "the agents agreed and settled".
+    const head = outcome.sealDegraded
+      ? "الوكلاء المقروئون اتفقوا، لكن الاتفاق مش مختوم رسميًا"
+      : settledOnly ? "الوكلاء اتفقوا واستقرّوا على إجابة واحدة" : "الوكلاء اتفقوا والمهمة اكتملت";
     const tail = outcome.stoppedEarly ? `في الجولة ${round} — تم إيقاف الجولات المتبقية.` : `في الجولة الأخيرة (${round}).`;
     // Not "raise the rounds" — the same convergence guard would just stop again with nothing new;
     // a follow-up question or a narrowed scope is what actually moves a settled discussion forward.
@@ -357,13 +371,19 @@ function terminalOutcomeReport(outcome) {
     // external check). completionState=incomplete would otherwise map this to a plain settled
     // outcome and hide the required step — so surface those items instead of dropping them.
     const pending = outcome.pendingItems.length ? `\nلسه فيه نقاط محتاجة إجراء منك أو تحقّق خارجي:${pendingItemList(outcome)}` : "";
-    // Honest quorum note: the agreement was sealed on the valid MAJORITY because a provider's control block
-    // couldn't be certified (and, for Codex/Cursor, can't be safely repaired). Name the excluded provider(s).
-    const blame = outcome.sealedOnQuorum ? controlBlameLine(outcome) : "";
-    // Honest: the excluded provider's control couldn't be read, so its actual position is UNKNOWN — don't claim
-    // it wasn't a disagreement (its unparseable block could have carried one).
-    const quorum = blame ? ` (الاتفاق اتختم على الأغلبية؛ ${blame} — استُبعد من الختم، وموقفه الفعلي غير معروف.)` : "";
-    return `${head} ${tail}${quorum}${deeper}${pending}`;
+    // Honest control note. Two mutually exclusive cases name the excluded provider via controlBlameLine:
+    // - sealedOnQuorum: a valid MAJORITY sealed because one control couldn't be certified (3+ agents).
+    // - sealDegraded: no majority could seal (e.g. only one readable voice after a dropout), so we stopped
+    //   honestly once the readable side had converged rather than looping to the round limit.
+    const blame = (outcome.sealedOnQuorum || outcome.sealDegraded) ? controlBlameLine(outcome) : "";
+    const note = outcome.sealDegraded
+      ? blame
+        ? ` (${blame} — فتعذّر الختم الرسمي وموقفه الفعلي غير معروف؛ وقفنا بدل ما نكمّل جولات من غير جديد.)`
+        : ` (بيانات تحكم أحد المشاركين غير مقروءة فتعذّر الختم الرسمي؛ وقفنا بدل ما نكمّل جولات من غير جديد.)`
+      : blame
+        ? ` (الاتفاق اتختم على الأغلبية؛ ${blame} — استُبعد من الختم، وموقفه الفعلي غير معروف.)`
+        : "";
+    return `${head} ${tail}${note}${deeper}${pending}`;
   }
   if (outcome.phase === "needs_user") {
     return `الوكلاء متفقون، والنقاش توقف في الجولة ${round} لأن النتيجة تحتاج قرارك.${pendingItemList(outcome)}`;
@@ -782,8 +802,8 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       recordControlRepair(controlRepairStats, audit);
     };
 
-    const assessRepairedRound = async (roundMessages, targetVersion, itemRegistry, confirmationsExhausted = false) => {
-      let assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationsExhausted);
+    const assessRepairedRound = async (roundMessages, targetVersion, itemRegistry, confirmationsExhausted = false, invalidControlExhausted = false) => {
+      let assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationsExhausted, invalidControlExhausted);
       if (!assessment.repairTargets.length) return assessment;
       const originalControls = roundMessages.map((message) => message.control);
       await Promise.all(assessment.repairTargets.map(async (target) => {
@@ -798,7 +818,9 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       }));
       assertRunAcceptsOutput(sessionId, state);
       if (!(await persistRunProgress(session, state, emit))) throw runInactiveError(state);
-      assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationsExhausted);
+      // Re-assess after repair. A control that was unreadable/unrepairable is still invalid here, so the
+      // degraded-stop signal is computed on the POST-repair state — repair gets its chance first.
+      assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationsExhausted, invalidControlExhausted);
       return assessment;
     };
 
@@ -949,6 +971,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
     let finalizerFailed = null;
     let proposalVersion = 1;
     let confirmationRoundsRun = 0; // consecutive confirmation rounds so far (bounded by MAX_CONFIRMATION_ROUNDS)
+    let degradedRoundsRun = 0; // consecutive degradable rounds BEFORE the current one (bounded by DEGRADED_STOP_ROUNDS)
     // Per-round diagnostics: why each round continued (or stopped) and who changed the proposal. Recorded
     // for every assessed round so a run is diagnosable from its outcome/export, not only the final state.
     const roundDiagnostics = [];
@@ -1066,6 +1089,10 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         // MAX_CONFIRMATION_ROUNDS of them still converged, accept the agreement instead of looping.
         confirmationRoundsRun = confirmationRound ? confirmationRoundsRun + 1 : 0;
         const confirmationsExhausted = confirmationRoundsRun >= MAX_CONFIRMATION_ROUNDS;
+        // Consecutive degradable rounds before this one; once this round would be the DEGRADED_STOP_ROUNDS-th
+        // in a row, allow the honest degraded stop instead of looping to the round limit.
+        degradedRoundsRun = lastAssessment?.degradable === true ? degradedRoundsRun + 1 : 0;
+        const invalidControlExhausted = degradedRoundsRun + 1 >= DEGRADED_STOP_ROUNDS;
         const roundOutcome = await runResilientRound(roster().map((agent) => {
           const prompt = collaborationPrompt({
             session: snapshot,
@@ -1084,14 +1111,16 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMessages = await reconcileRound(roundOutcome, minSurvivors);
-        const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry, confirmationsExhausted);
+        const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry, confirmationsExhausted, invalidControlExhausted);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMessages, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
         // canStop is checked FIRST: with confirmations exhausted, canStop can be true even while proposalChanged
-        // is true, and the old proposalChanged-first order would loop past it.
-        if (assessment.canStop) break;
+        // is true, and the old proposalChanged-first order would loop past it. degradedStop is a separate
+        // terminal path: the round couldn't formally seal (an unreadable control) but the readable participants
+        // converged and the condition persisted, so stop honestly instead of running out the rounds.
+        if (assessment.canStop || assessment.degradedStop) break;
         if (assessment.proposalChanged) proposalVersion += 1;
       }
     } else {
@@ -1129,6 +1158,8 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         const confirmationRound = lastAssessment?.awaitingConfirmation === true;
         confirmationRoundsRun = confirmationRound ? confirmationRoundsRun + 1 : 0;
         const confirmationsExhausted = confirmationRoundsRun >= MAX_CONFIRMATION_ROUNDS;
+        degradedRoundsRun = lastAssessment?.degradable === true ? degradedRoundsRun + 1 : 0;
+        const invalidControlExhausted = degradedRoundsRun + 1 >= DEGRADED_STOP_ROUNDS;
         const rebuttalOutcome = await runResilientRound(roster().map((agent) => {
           const opponent = roster().find((key) => key !== agent);
           const prompt = debatePrompt({
@@ -1150,14 +1181,15 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "rebuttal"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMsgs = await reconcileRound(rebuttalOutcome, minSurvivors);
-        const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry, confirmationsExhausted);
+        const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry, confirmationsExhausted, invalidControlExhausted);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMsgs, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
         // canStop first (see the collaboration loop): with confirmations exhausted it can be true while
-        // proposalChanged is also true.
-        if (assessment.canStop) break;
+        // proposalChanged is also true. degradedStop is the separate honest-stop path when an unreadable
+        // control blocks the seal but the readable side converged and the condition persisted.
+        if (assessment.canStop || assessment.degradedStop) break;
         if (assessment.proposalChanged) proposalVersion += 1;
       }
     }

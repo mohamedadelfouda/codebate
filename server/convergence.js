@@ -521,7 +521,7 @@ function agreementStateFor({ roundValid, controls, pendingItems, conflicts, uncl
   return controls.every((control) => control.convergence === "converged") ? "converged" : "unknown";
 }
 
-function discussionState(validation, confirmationsExhausted = false) {
+function discussionState(validation, confirmationsExhausted = false, invalidControlExhausted = false) {
   // `certified` is the set the round is certified on — everyone (strict) or the valid majority (quorum). It
   // falls back to `present` when nothing certifies, so agreement/completion always read the sealing controls.
   const { present, certified, roundValid, currentRegistry, application } = validation;
@@ -576,14 +576,32 @@ function discussionState(validation, confirmationsExhausted = false) {
   // their matching official item through the round consistency rules, so this stays faithful to
   // what the agents reported. The new case this enables, an agreed-but-incomplete stop, reports
   // as a plain completed agreement (the report layer distinguishes "settled" from "satisfied").
+  // Degraded stop. A round can fail to formally seal ONLY because a present control is unreadable and
+  // unrepairable — continueReason === "invalid_control" means the round is invalid for that reason and NOT
+  // a consistency error or a real open disagreement. When that happens yet every READABLE control converged
+  // with nothing left to change, the readable participants have plainly agreed; the one unreadable voice is
+  // simply unknown. Sealing on it would seal on a single machine-readable voice (unsafe), so we DON'T — but
+  // once the condition has persisted (invalidControlExhausted, bounded by the orchestrator) we stop honestly
+  // with a "degraded" outcome instead of burning to the round limit. The report layer says plainly that the
+  // formal seal failed and which participant's control was unreadable.
+  const validControls = validation.present.filter((control) => control.valid);
+  const readableConverged = validControls.length >= 1
+    && validControls.every((control) => control.convergence === "converged" && !control.substantiveDelta);
+  // Require an ACTUAL unreadable control present. `continueReason === "invalid_control"` is a catch-all for
+  // any !roundValid cause that isn't a consistency error — it also covers a version mismatch or a bad
+  // registry where every present control parsed fine. Those are NOT "a control was unreadable" (the report
+  // would falsely name a provider), so gate the degraded stop on there genuinely being an invalid control.
+  const hasUnreadableControl = validation.present.some((control) => !control.valid);
+  const degradable = !roundValid && continueReason === "invalid_control" && hasUnreadableControl && readableConverged;
+  const degradedStop = degradable && invalidControlExhausted;
   const stopReason = !roundValid
-    ? "invalid_control"
+    ? (degradedStop ? "degraded_convergence" : "invalid_control")
     : !canStop
       ? null
       : { satisfied: "complete", needs_user: "user_decision", blocked: "external_block", incomplete: "complete" }[completionState];
   // Report the "sealed on quorum" flag only when the quorum-certified round actually CONVERGED — otherwise the
   // round is certified-but-open (a real disagreement among the valid majority), which is not a sealed agreement.
-  return { canStop, awaitingConfirmation, continueReason, agreementState, completionState, stopReason, approvedRegistry, pendingItems, unclassifiedPoints, disagreements, proposedDisagreements, proposalChanged, sealedOnQuorum: validation.sealedOnQuorum === true && agreementState === "converged" };
+  return { canStop, awaitingConfirmation, continueReason, agreementState, completionState, stopReason, approvedRegistry, pendingItems, unclassifiedPoints, disagreements, proposedDisagreements, proposalChanged, degradable, degradedStop, sealedOnQuorum: validation.sealedOnQuorum === true && agreementState === "converged" };
 }
 
 function assessmentPayload(validation, state) {
@@ -611,12 +629,14 @@ function assessmentPayload(validation, state) {
     allValid: validation.roundValid,
     controlsParseable: validation.controlsValid,
     sealedOnQuorum: state.sealedOnQuorum,
+    degradable: state.degradable,
+    degradedStop: state.degradedStop,
   };
 }
 
-export function assessRound(controls, targetVersion, itemRegistry = [], confirmationsExhausted = false) {
+export function assessRound(controls, targetVersion, itemRegistry = [], confirmationsExhausted = false, invalidControlExhausted = false) {
   const validation = validateRound(controls, targetVersion, itemRegistry);
-  return assessmentPayload(validation, discussionState(validation, confirmationsExhausted));
+  return assessmentPayload(validation, discussionState(validation, confirmationsExhausted, invalidControlExhausted));
 }
 
 function equalJson(left, right) {
