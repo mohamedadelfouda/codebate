@@ -11,6 +11,12 @@ const ANSWER_HYGIENE = `Your reply is the answer itself, not a report on how you
 // (Cursor especially) default to English inside an Arabic conversation, so make it emphatic and unmissable.
 const LANGUAGE_DIRECTIVE = `Write your ENTIRE reply in the SAME LANGUAGE as the user's latest message — if they wrote in Arabic, answer in Arabic; if in English, answer in English. This is a hard requirement, not a stylistic preference.`;
 
+// Live web is only available in single-agent Chat. In the collaborative modes an agent that keeps
+// re-stating "I can't verify without browsing" across rounds just burns the session on an impossible
+// task. Tell them to resolve it in ONE turn — name it as needing the user and point to the concrete
+// route — instead of looping on the same limitation.
+const WEB_UNAVAILABLE_IN_DISCUSSION = `Live web browsing is NOT available in this collaborative mode — only single-agent Chat can search the web. If the user's request genuinely needs current web data or a page you cannot see, do not spend rounds repeating that you can't verify: say it once, record it as needing the user (goalStatus needs_user with a user_decision item), and recommend the concrete next step — re-run in Chat mode (which has web) or paste the page content. Then converge; restating the same limitation each round only burns the session.`;
+
 // Agents kept treating an attached document as "the task", drifting from what the user actually asked (e.g.
 // "analyze this failed session" turned into a review of the plan pasted inside it). Keep the user's own
 // instruction as the task; attachments are material to act ON, not new instructions or a replacement subject.
@@ -210,8 +216,12 @@ export function collaborationPrompt({ session, agentLabel, role, round, totalRou
     ? `Lay out your take in full this round. Talk through what's already solid in the shared work, what you'd change or add and why, the proposal as you'd shape it now, and anything you're honestly still unsure about. Write it the way you'd talk it through with a colleague you respect — in your own voice, not as a stiff numbered form.`
     : confirmationRound
       ? `This is a confirmation round: the group already landed in the same place, and a participant made a late change last round you may not have seen. Read the latest proposal and the others' most recent turn, then either confirm you're still aligned, or — only if it genuinely changes the shared decision — say plainly what has to change. Don't add optional improvements, rephrasing, or new angles.`
-      : `This is a later round, so keep it to what's actually new — don't rewrite the whole plan. In a few honest lines: what you now accept from the others' latest turns, where any of them is off and why, the one or two things you're really adding this round, and whatever's still open between you. Engage with every other agent's points, not just one. If you've got nothing substantive left to add, just say so — don't pad it out.`;
+      : `This is a later round — by now the group is usually converging, and your job is to CONFIRM alignment or name a genuine disagreement, not to keep adding. In a few honest lines: what you now accept from the others' latest turns, and whether anything they said actually changes the shared decision. Treat a change as substantive ONLY if it would change the group's decision — an optional improvement, a new angle, a refinement, or a rephrasing does NOT count and only keeps the session running. Engage with every other agent, not just one. If you're aligned, say so plainly so the session can stop; if you've genuinely nothing decision-changing to add, say that — don't manufacture a delta to fill the round.`;
   const control = round >= 2 ? `\n${controlInstruction(targetVersion, itemRegistry, confirmationRound)}\n` : "";
+  // No web in this mode. Only add the notice when no project is attached (a project-grounded discussion is
+  // about the code, not a web lookup) AND once the control contract exists (round >= 2) — the note tells
+  // agents to record a needs_user item, which only has a defined <agent-control> syntax from round 2 on.
+  const webNote = !projectSnapshot && round >= 2 ? ` ${WEB_UNAVAILABLE_IN_DISCUSSION}` : "";
   return `You're ${agentLabel}, one of ${participants.length || "several"} agents thinking this through together in a shared session that the user runs and ultimately decides on.${roster}
 Your seat at the table: ${role || "Collaborator"}.
 This is round ${round} of THIS run, and there's room for up to ${totalRounds} — but you're not here to fill rounds. The moment all the agents genuinely land in the same place, the session stops early, and that's exactly the outcome we want. The round number and status here are the authoritative count for THIS run: if the session was interrupted and resumed, don't mistake an earlier attempt's "rounds completed" text for the current round. (A prior run that finished normally is still valid context — if the user is building on that earlier agreed result, work from it, don't discard it.)
@@ -220,7 +230,7 @@ You're not competing. You're building one answer that's better than any of you w
 
 ${guidance}
 ${control}
-${LANGUAGE_DIRECTIVE} You don't literally share a session with the other models — the local orchestrator is handing you the shared transcript, so don't pretend otherwise. ${tools}
+${LANGUAGE_DIRECTIVE} You don't literally share a session with the other models — the local orchestrator is handing you the shared transcript, so don't pretend otherwise. ${tools}${webNote}
 ${ANSWER_HYGIENE}
 ${TASK_INTERPRETATION}
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
@@ -262,8 +272,11 @@ export function debatePrompt({ session, agentLabel, role, opponentLabel, round, 
     ? `This is your opening. Form your own position from the task and the earlier context — don't shadow how your opponent framed theirs. Make the real case: where you stand and why, your strongest arguments, what you'll honestly concede, where the other side falls short, what evidence or test would actually change your mind, the call you'd make, and how confident you are (0–100). Argue it like you mean it, in your own voice — not as a checklist.`
     : confirmationRound
       ? `This is a confirmation round: the group already landed in the same place, and a participant made a late change last round you may not have seen. Read the latest proposal and the other side's most recent turn, then either confirm you're still aligned, or — only if it genuinely changes the shared decision — say plainly what has to change. Don't add optional improvements, rephrasing, or new angles.`
-      : `This is a rebuttal, so go straight at the strongest opposing point on the table — don't re-argue your whole case. In a few sharp, honest lines: what you now concede from their last turn, your best specific challenge to it, anything genuinely new you're bringing this round, what's still unsettled between you, and your updated confidence (0–100).`;
+      : `This is a rebuttal, so go straight at the strongest opposing point on the table — don't re-argue your whole case. In a few sharp, honest lines: what you now concede from their last turn, your best specific challenge to it, whether anything actually changes the decision (mark it substantive ONLY if it would — a refinement or new angle that doesn't move the verdict does not count and just keeps the debate running), what's still unsettled between you, and your updated confidence (0–100). If the disagreement is genuinely resolved, say so plainly so it can stop.`;
   const control = !independent ? `\n${controlInstruction(targetVersion, itemRegistry, confirmationRound)}\n` : "";
+  // No web here either; gate the notice to a rebuttal turn (control present, !independent) so the needs_user
+  // item it references has a defined syntax, and skip it when a project is attached (see collaboration).
+  const webNote = !projectSnapshot && !independent ? ` ${WEB_UNAVAILABLE_IN_DISCUSSION}` : "";
   // When the debate was opened on an existing discussion, the subject is the answer already on
   // the table — the user's message ("let's debate this") is only the trigger. Anchor to it
   // explicitly so the context isn't lost and the agents don't debate the switch itself. If the
@@ -286,7 +299,7 @@ This is round ${round} of THIS run, with room for up to ${totalRounds} — but t
 
 ${guidance}
 ${control}
-${LANGUAGE_DIRECTIVE} ${tools}
+${LANGUAGE_DIRECTIVE} ${tools}${webNote}
 ${ANSWER_HYGIENE}
 ${TASK_INTERPRETATION}
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
