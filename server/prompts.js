@@ -7,9 +7,36 @@ function clean(text) {
 // agent's tooling, so every phase forbids that narration.
 const ANSWER_HYGIENE = `Your reply is the answer itself, not a report on how you produced it: never narrate tool calls, permission prompts, or CLI/shell errors (for example "the shell was rejected" or "I don't have permission to run that"). If something you would have checked isn't available, work with what you have and, where it matters, state briefly what you couldn't verify.`;
 
-// D1: a hard, prominent language directive. A soft "reply in the same language" line still let providers
-// (Cursor especially) default to English inside an Arabic conversation, so make it emphatic and unmissable.
-const LANGUAGE_DIRECTIVE = `Write your ENTIRE reply in the SAME LANGUAGE as the user's latest message — if they wrote in Arabic, answer in Arabic; if in English, answer in English. This is a hard requirement, not a stylistic preference.`;
+// D1: a hard, prominent language lock. A soft "reply in the same language" line still let providers
+// (gpt/Codex especially) drift to English as the transcript filled with analytical text — a real session
+// had Codex answer in Arabic for two rounds then switch to English. Two changes fix that: (1) DETECT the
+// user's language server-side and name it explicitly, so the model isn't inferring "the same language as
+// the latest message" (ambiguous once the transcript itself carries English agent turns); (2) repeat the
+// lock at the very END of the prompt (recency) — the last thing the model reads before generating, after
+// the transcript that would otherwise pull it toward English.
+function conversationLanguage(userTask) {
+  // Detect over the user's OWN instruction only. `userTask` can carry attached file text (the client appends
+  // it after an "[Attached files]" marker), and an English request with an attached Arabic document must NOT
+  // flip the reply to Arabic — the attachment is material to act on, not the language the user is writing in.
+  const text = String(userTask || "").split("[Attached files]")[0];
+  // Cover the common Arabic blocks (basic + supplement + extended-A + presentation forms) so pasted/legacy
+  // text isn't miscounted as neither Arabic nor Latin.
+  const arabic = (text.match(/[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/g) || []).length;
+  const latin = (text.match(/[A-Za-z]/g) || []).length;
+  // Bias toward Arabic when there's a meaningful amount of it: an Arabic speaker sprinkles English tech
+  // terms (API, endpoint, backtest) constantly, so a pure `arabic > latin` count would flag a clearly
+  // Arabic request as English. An English speaker almost never sprinkles Arabic, so the >= 8 floor is safe.
+  return arabic >= 8 || arabic > latin ? "Arabic (العربية)" : "English";
+}
+function languageDirective(userTask) {
+  const name = conversationLanguage(userTask);
+  return `LANGUAGE — a hard requirement, not a preference: write your ENTIRE reply in ${name}, the user's language. Other agents' turns in the transcript may be in a different language; do NOT follow them or drift as the discussion grows — reply only in ${name}.`;
+}
+// Recency reinforcement: appended as the LAST line of the prompt, after the transcript, so it wins over the
+// transcript's language pull right before the model generates.
+function languageReminder(userTask) {
+  return `\n\nBefore you answer — your entire reply MUST be written in ${conversationLanguage(userTask)}, regardless of the language used in the turns above.`;
+}
 
 // Live web is only available in single-agent Chat. In the collaborative modes an agent that keeps
 // re-stating "I can't verify without browsing" across rounds just burns the session on an impossible
@@ -230,7 +257,7 @@ You're not competing. You're building one answer that's better than any of you w
 
 ${guidance}
 ${control}
-${LANGUAGE_DIRECTIVE} You don't literally share a session with the other models — the local orchestrator is handing you the shared transcript, so don't pretend otherwise. ${tools}${webNote}
+${languageDirective(userTask)} You don't literally share a session with the other models — the local orchestrator is handing you the shared transcript, so don't pretend otherwise. ${tools}${webNote}
 ${ANSWER_HYGIENE}
 ${TASK_INTERPRETATION}
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
@@ -238,7 +265,7 @@ What the user asked for [user-provided]:
 ${clean(userTask)}
 
 The conversation so far:
-${transcriptFor(session, transcriptBudget)}`;
+${transcriptFor(session, transcriptBudget)}${languageReminder(userTask)}`;
 }
 
 export function chatPrompt({ session, agentLabel, role, userTask, capabilities = {}, projectSnapshot = "", transcriptBudget = TRANSCRIPT_BUDGET_CHARS }) {
@@ -254,14 +281,14 @@ Your assigned role: ${role || "Assistant"}.
 
 This is a normal chat: answer the user's latest message directly and helpfully in your own voice. ${web} ${project} The other agents are answering the same message separately — do not coordinate with, imitate, or wait for their answers.
 
-${LANGUAGE_DIRECTIVE} Do not claim you directly share a provider-side session with another model; the local orchestrator is supplying the shared transcript. Do not modify files or run shell commands.
+${languageDirective(userTask)} Do not claim you directly share a provider-side session with another model; the local orchestrator is supplying the shared transcript. Do not modify files or run shell commands.
 ${ANSWER_HYGIENE}
 
 Latest user message [user-provided]:
 ${clean(userTask)}
 
 Shared session transcript (for context only):
-${transcriptFor(session, transcriptBudget)}`;
+${transcriptFor(session, transcriptBudget)}${languageReminder(userTask)}`;
 }
 
 export function debatePrompt({ session, agentLabel, role, opponentLabel, round, totalRounds, userTask, independent, projectSnapshot = "", targetVersion = 1, itemRegistry = [], proposition = "", confirmationRound = false, transcriptBudget = TRANSCRIPT_BUDGET_CHARS }) {
@@ -299,14 +326,14 @@ This is round ${round} of THIS run, with room for up to ${totalRounds} — but t
 
 ${guidance}
 ${control}
-${LANGUAGE_DIRECTIVE} ${tools}${webNote}
+${languageDirective(userTask)} ${tools}${webNote}
 ${ANSWER_HYGIENE}
 ${TASK_INTERPRETATION}
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
 ${subject}
 
 The debate so far:
-${transcriptFor(session, transcriptBudget)}`;
+${transcriptFor(session, transcriptBudget)}${languageReminder(userTask)}`;
 }
 
 export function synthesisPrompt({ session, agentLabel, role, userTask, mode, projectSnapshot = "", outcome = null, participants = [], transcriptBudget = TRANSCRIPT_BUDGET_CHARS }) {
@@ -347,7 +374,7 @@ Required response structure (translate every heading into the user's language):
 8. Decisions that are the user's to make (product/ownership), kept separate from the technical choices above.
 9. Next practical step.
 
-${LANGUAGE_DIRECTIVE} ${tools}
+${languageDirective(userTask)} ${tools}
 ${ANSWER_HYGIENE}
 ${TASK_INTERPRETATION} Your brief must answer THAT request. If the discussion drifted from what the user actually asked (e.g. they asked you to analyze an attached session, but the agents reviewed the plan inside it instead), say so plainly and refocus the brief on the real request — don't present the drift as if it were the answer.
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
@@ -355,7 +382,7 @@ Original/current user task [user-provided]:
 ${clean(userTask)}
 
 Shared session transcript:
-${transcriptFor(session, transcriptBudget)}`;
+${transcriptFor(session, transcriptBudget)}${languageReminder(userTask)}`;
 }
 
 export function executionPrompt(task, mode) {

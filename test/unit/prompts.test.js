@@ -196,8 +196,9 @@ test("round-bearing prompts mark the orchestrator's round as authoritative but k
   assert.match(debate, /interrupted and resumed/i);
 });
 
-test("every prompt carries a hard same-language directive (D1)", () => {
-  // Cursor kept replying in English inside an Arabic conversation; the directive must be emphatic in every mode.
+test("every prompt names the user's language explicitly and reinforces it at the end (D1)", () => {
+  // A soft "same language as the latest message" let gpt/Codex drift to English mid-transcript. The lock now
+  // NAMES the detected language (base.userTask "design X" → English) and repeats at the very end, every mode.
   const prompts = [
     collaborationPrompt({ ...base, round: 1 }),
     collaborationPrompt({ ...base, round: 3, targetVersion: 2 }),
@@ -207,9 +208,30 @@ test("every prompt carries a hard same-language directive (D1)", () => {
     synthesisPrompt({ ...base, mode: "debate" }),
   ];
   for (const prompt of prompts) {
-    assert.match(prompt, /SAME LANGUAGE as the user's latest message/);
     assert.match(prompt, /hard requirement/);
+    assert.match(prompt, /reply in English/);                          // explicit target, not "same as latest"
+    assert.match(prompt, /your entire reply MUST be written in English/); // reinforcement present
   }
+  // Recency: the reinforcement must come AFTER the transcript so it's the last thing the model reads.
+  const collab = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  assert.ok(collab.lastIndexOf("MUST be written in English") > collab.indexOf("The conversation so far"));
+
+  // An Arabic task is detected and named, so the model isn't left to infer the language from an English-heavy
+  // transcript — the exact drift that turned Codex's later rounds English.
+  const arPrompt = collaborationPrompt({ ...base, userTask: "صمّم لي نظام تقييم للبورصة المصرية", round: 3, targetVersion: 2 });
+  assert.match(arPrompt, /reply in Arabic|in Arabic \(/);
+  assert.match(arPrompt, /MUST be written in Arabic/);
+  assert.doesNotMatch(arPrompt, /reply in English/);
+
+  // Detection runs on the user's OWN instruction, not attached file text: an English request with an
+  // attached Arabic document must still reply in English (the attachment is material, not the language).
+  const englishWithArabicAttachment = collaborationPrompt({
+    ...base,
+    userTask: "Review this file for issues\n\n[Attached files]\n--- doc.md ---\nمستند عربي طويل فيه كلام كتير جدا بالعربي",
+    round: 3, targetVersion: 2,
+  });
+  assert.match(englishWithArabicAttachment, /reply in English/);
+  assert.doesNotMatch(englishWithArabicAttachment, /reply in Arabic/);
 });
 
 test("every phase forbids narrating tool usage or CLI errors in the reader-facing answer (H9)", () => {
