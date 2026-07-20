@@ -469,21 +469,38 @@ function validateRound(controls, targetVersion, itemRegistry) {
   const controlsValid = allPresent && present.every((control) => control.valid);
   const currentRegistry = normalizeRegistry(itemRegistry);
   const registryValid = currentRegistry !== null;
-  const versionAligned = controlsValid && present.every((control) => control.targetVersion === targetVersion);
+
+  // QUORUM path: if not every control parsed but a STRICT MAJORITY did (and ≥2), the session can still certify
+  // on the valid majority instead of sinking a real agreement because one provider's control block was
+  // malformed (and, for Codex/Cursor, can't be safely repaired). The malformed controls are excluded — they
+  // contribute nothing — and surfaced honestly. Only 3+ participants can reach a quorum without unanimity;
+  // a 2-agent round still needs both (one valid control is not a majority), so this never seals on one voice.
+  const validControls = present.filter((control) => control.valid);
+  const quorumMet = allPresent && !controlsValid && validControls.length >= 2 && validControls.length > present.length / 2;
+  const certifyingValid = controlsValid || quorumMet;
+  // The controls the round is certified on: everyone (strict) or the valid majority (quorum).
+  const certified = controlsValid ? present : (quorumMet ? validControls : present);
+
+  const versionAligned = certifyingValid && certified.every((control) => control.targetVersion === targetVersion);
   const application = versionAligned && registryValid
-    ? applyProposals(present, currentRegistry)
+    ? applyProposals(certified, currentRegistry)
     : { registry: currentRegistry || [], conflicts: [], errors: [] };
   const candidatePendingItems = application.registry.filter((registryItem) => registryItem.status === "open");
   const { errors: consistencyErrors, warnings: normalizationWarnings } = roundConsistencyErrors({
+    // Pass the ORIGINAL `present` array (not `certified`) so terminalItemErrors emits controlIndex values
+    // aligned with the raw controls array that repairTargets matches against — otherwise, under quorum, a
+    // consistency error on a valid control would be mis-attributed to the wrong agent's index. Invalid controls
+    // are naturally skipped here (terminalClaim() is false for them), so this stays quorum-correct.
     controls: present,
     currentRegistry: currentRegistry || [],
     pendingItems: candidatePendingItems,
     applicationErrors: application.errors,
-    enabled: controlsValid && registryValid,
+    enabled: certifyingValid && registryValid,
   });
-  const roundValid = controlsValid && registryValid && versionAligned && consistencyErrors.length === 0;
+  const roundValid = certifyingValid && registryValid && versionAligned && consistencyErrors.length === 0;
   return {
     present,
+    certified,
     allPresent,
     versionAligned,
     currentRegistry: currentRegistry || [],
@@ -493,6 +510,7 @@ function validateRound(controls, targetVersion, itemRegistry) {
     repairTargets: repairTargets(controls, targetVersion, consistencyErrors),
     roundValid,
     controlsValid,
+    sealedOnQuorum: roundValid && quorumMet,
   };
 }
 
@@ -503,11 +521,13 @@ function agreementStateFor({ roundValid, controls, pendingItems, conflicts, uncl
   return controls.every((control) => control.convergence === "converged") ? "converged" : "unknown";
 }
 
-function discussionState(validation) {
-  const { present, roundValid, currentRegistry, application } = validation;
+function discussionState(validation, confirmationsExhausted = false) {
+  // `certified` is the set the round is certified on — everyone (strict) or the valid majority (quorum). It
+  // falls back to `present` when nothing certifies, so agreement/completion always read the sealing controls.
+  const { present, certified, roundValid, currentRegistry, application } = validation;
   const approvedRegistry = roundValid ? application.registry : (currentRegistry || []);
   const pendingItems = approvedRegistry.filter((registryItem) => registryItem.status === "open");
-  const unclassifiedPoints = [...new Set(present.flatMap((control) => control.openPoints || []).filter(Boolean))];
+  const unclassifiedPoints = [...new Set(certified.flatMap((control) => control.openPoints || []).filter(Boolean))];
   const disagreements = pendingItems.filter((pendingItem) => pendingItem.kind === "disagreement").map((pendingItem) => pendingItem.text);
   // Disagreements the agents RAISED in their controls this round, read straight from the
   // proposals — available even when the round can't be certified. This is report-only context
@@ -518,9 +538,9 @@ function discussionState(validation) {
     .filter((proposal) => proposal.action === "create" && proposal.kind === "disagreement")
     .map((proposal) => proposal.text)
     .filter(Boolean))];
-  const agreementState = agreementStateFor({ roundValid, controls: present, pendingItems, conflicts: application.conflicts, unclassifiedPoints });
-  const completionState = roundValid ? aggregateCompletion(present, pendingItems) : "incomplete";
-  const proposalChanged = roundValid && present.some((control) => control.substantiveDelta);
+  const agreementState = agreementStateFor({ roundValid, controls: certified, pendingItems, conflicts: application.conflicts, unclassifiedPoints });
+  const completionState = roundValid ? aggregateCompletion(certified, pendingItems) : "incomplete";
+  const proposalChanged = roundValid && certified.some((control) => control.substantiveDelta);
   // Early stop is driven by AGREEMENT, not by the task being fully done: once both agents
   // converge and a full round passes with no substantive change, further rounds only repeat.
   // We never stop while an open item still requires another agent round (an unresolved
@@ -531,13 +551,19 @@ function discussionState(validation) {
   // another round would genuinely help). Completion state stays in the reported outcome, no
   // longer a gate, so an agreed answer that still needs the user or an outside check stops here.
   const agentWorkPending = pendingItems.some((pendingItem) => pendingItem.requiredStep.action === "resume_agent_round");
-  const canStop = roundValid && !proposalChanged && agreementState === "converged" && !agentWorkPending;
+  // Bounded loop-breaker for substantiveDelta over-signalling: once the confirmation rounds are EXHAUSTED, stop
+  // even if a provider keeps self-reporting a marginal delta. The delta that STARTED the confirmation streak
+  // already got a round to reach the parallel peers; a brand-new change landing on the final capped round does
+  // NOT get re-confirmed, but that residual is bounded (one round) and only ever accepted while the certified
+  // controls are still converged — a genuine new disagreement flips agreementState off "converged" and keeps
+  // the discussion going regardless.
+  const canStop = roundValid && agreementState === "converged" && !agentWorkPending && (!proposalChanged || confirmationsExhausted);
   // Agreement is reached, but a participant made a late substantive change THIS round. Agents run in
   // parallel on one shared snapshot, so the others haven't seen it yet — the round correctly can't stop.
   // This flags "the next round is a confirmation round": the orchestrator gives it a tightened prompt so
   // participants only re-open on a genuine decision change, instead of drifting into marginal re-tweaks
   // that keep proposalChanged=true and never converge. Mutually exclusive with canStop by construction.
-  const awaitingConfirmation = roundValid && agreementState === "converged" && proposalChanged && !agentWorkPending;
+  const awaitingConfirmation = roundValid && agreementState === "converged" && proposalChanged && !agentWorkPending && !confirmationsExhausted;
   // Why this round did (or didn't) end the session — recorded per round so a run can be diagnosed from
   // its export instead of only the final assessment. Cases are exhaustive and ordered by precedence.
   const continueReason = canStop ? "stopped"
@@ -555,7 +581,9 @@ function discussionState(validation) {
     : !canStop
       ? null
       : { satisfied: "complete", needs_user: "user_decision", blocked: "external_block", incomplete: "complete" }[completionState];
-  return { canStop, awaitingConfirmation, continueReason, agreementState, completionState, stopReason, approvedRegistry, pendingItems, unclassifiedPoints, disagreements, proposedDisagreements, proposalChanged };
+  // Report the "sealed on quorum" flag only when the quorum-certified round actually CONVERGED — otherwise the
+  // round is certified-but-open (a real disagreement among the valid majority), which is not a sealed agreement.
+  return { canStop, awaitingConfirmation, continueReason, agreementState, completionState, stopReason, approvedRegistry, pendingItems, unclassifiedPoints, disagreements, proposedDisagreements, proposalChanged, sealedOnQuorum: validation.sealedOnQuorum === true && agreementState === "converged" };
 }
 
 function assessmentPayload(validation, state) {
@@ -582,12 +610,13 @@ function assessmentPayload(validation, state) {
     allPresent: validation.allPresent,
     allValid: validation.roundValid,
     controlsParseable: validation.controlsValid,
+    sealedOnQuorum: state.sealedOnQuorum,
   };
 }
 
-export function assessRound(controls, targetVersion, itemRegistry = []) {
+export function assessRound(controls, targetVersion, itemRegistry = [], confirmationsExhausted = false) {
   const validation = validateRound(controls, targetVersion, itemRegistry);
-  return assessmentPayload(validation, discussionState(validation));
+  return assessmentPayload(validation, discussionState(validation, confirmationsExhausted));
 }
 
 function equalJson(left, right) {

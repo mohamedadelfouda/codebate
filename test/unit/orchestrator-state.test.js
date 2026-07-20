@@ -527,6 +527,42 @@ test("2026-07-18 regression: omitted approved items are repaired before the fina
   }
 });
 
+test("over-signalled substantiveDelta stops after the confirmation-round cap, not at the round limit", async (t) => {
+  // Both agents stay converged but keep flagging a marginal substantiveDelta every round. Without the cap this
+  // runs all 5 rounds; with MAX_CONFIRMATION_ROUNDS=2 it stops at round 4 — a genuine delta still got its
+  // propagation round (round 3) before the loop accepted the agreement.
+  const session = await createSession("confirmation-cap");
+  const claudeCalls = [];
+  const codexCalls = [];
+  t.mock.method(provider("claude"), "run", async () => {
+    claudeCalls.push(1);
+    const call = claudeCalls.length;
+    return providerResult(call === 1 ? "Claude opening"
+      : versionedControl({ goalStatus: "satisfied", itemProposals: [], substantiveDelta: true, targetVersion: call - 1 }));
+  });
+  t.mock.method(provider("codex"), "run", async () => {
+    codexCalls.push(1);
+    const call = codexCalls.length;
+    return providerResult(call === 1 ? "Codex opening"
+      : versionedControl({ goalStatus: "satisfied", itemProposals: [], substantiveDelta: true, targetVersion: call - 1 }));
+  });
+
+  try {
+    await runOrchestration(session.id, {
+      mode: "collaboration", rounds: 5, content: "cap the confirmation rounds", finalizer: "none",
+      agents: { claude: { enabled: true, role: "Collaborator" }, codex: { enabled: true, role: "Collaborator" } },
+    }, () => {});
+
+    const saved = await getSession(session.id);
+    const outcome = saved.messages.find((message) => message.meta?.outcome)?.meta.outcome;
+    assert.equal(outcome.completedRounds, 4);        // stopped at the cap, not the round limit of 5
+    assert.equal(outcome.agreementState, "converged");
+    assert.equal(saved.messages.some((message) => message.round === 5), false);
+  } finally {
+    await cleanupSession(session.id);
+  }
+});
+
 test("a converged round with a late change makes the next round a confirmation round, then stops", async (t) => {
   const session = await createSession("confirmation-round-wiring");
   const claudePrompts = [];

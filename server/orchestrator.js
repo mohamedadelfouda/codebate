@@ -27,6 +27,10 @@ import {
 const activeRuns = new Map();
 const DISCUSSION_MODES = new Set(["chat", "collaboration", "debate"]);
 const MAX_ROLE_CODEPOINTS = 180;
+// How many consecutive confirmation rounds to allow before accepting a converged agreement despite a provider
+// still self-reporting a marginal substantiveDelta. Bounded so over-signalling can't burn every round, but ≥2
+// so a GENUINE late change gets at least one round to reach the parallel peers before the loop stops.
+const MAX_CONFIRMATION_ROUNDS = 2;
 const CONTROL_REPAIR_TIMEOUT_MS = 60000;
 const MAX_CONTROL_REPAIR_OUTPUT_BYTES = 64 * 1024;
 const MAX_CONTROL_SNAPSHOT_BYTES = 5000;
@@ -325,6 +329,7 @@ export function buildDiscussionOutcome(assessment, requestedRounds, completedRou
     conflicts: structuredClone(assessment.conflicts),
     controlValid: assessment.allValid,
     controlsParseable: assessment.controlsParseable,
+    sealedOnQuorum: assessment.sealedOnQuorum === true,
     roundDiagnostics: structuredClone(roundDiagnostics),
     ...(controlRepairStats ? { controlRepairStats: structuredClone(controlRepairStats) } : {}),
   };
@@ -352,7 +357,13 @@ function terminalOutcomeReport(outcome) {
     // external check). completionState=incomplete would otherwise map this to a plain settled
     // outcome and hide the required step — so surface those items instead of dropping them.
     const pending = outcome.pendingItems.length ? `\nلسه فيه نقاط محتاجة إجراء منك أو تحقّق خارجي:${pendingItemList(outcome)}` : "";
-    return `${head} ${tail}${deeper}${pending}`;
+    // Honest quorum note: the agreement was sealed on the valid MAJORITY because a provider's control block
+    // couldn't be certified (and, for Codex/Cursor, can't be safely repaired). Name the excluded provider(s).
+    const blame = outcome.sealedOnQuorum ? controlBlameLine(outcome) : "";
+    // Honest: the excluded provider's control couldn't be read, so its actual position is UNKNOWN — don't claim
+    // it wasn't a disagreement (its unparseable block could have carried one).
+    const quorum = blame ? ` (الاتفاق اتختم على الأغلبية؛ ${blame} — استُبعد من الختم، وموقفه الفعلي غير معروف.)` : "";
+    return `${head} ${tail}${quorum}${deeper}${pending}`;
   }
   if (outcome.phase === "needs_user") {
     return `الوكلاء متفقون، والنقاش توقف في الجولة ${round} لأن النتيجة تحتاج قرارك.${pendingItemList(outcome)}`;
@@ -771,8 +782,8 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       recordControlRepair(controlRepairStats, audit);
     };
 
-    const assessRepairedRound = async (roundMessages, targetVersion, itemRegistry) => {
-      let assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry);
+    const assessRepairedRound = async (roundMessages, targetVersion, itemRegistry, confirmationsExhausted = false) => {
+      let assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationsExhausted);
       if (!assessment.repairTargets.length) return assessment;
       const originalControls = roundMessages.map((message) => message.control);
       await Promise.all(assessment.repairTargets.map(async (target) => {
@@ -787,7 +798,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       }));
       assertRunAcceptsOutput(sessionId, state);
       if (!(await persistRunProgress(session, state, emit))) throw runInactiveError(state);
-      assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry);
+      assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationsExhausted);
       return assessment;
     };
 
@@ -937,6 +948,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
     let officialOutcome = null;
     let finalizerFailed = null;
     let proposalVersion = 1;
+    let confirmationRoundsRun = 0; // consecutive confirmation rounds so far (bounded by MAX_CONFIRMATION_ROUNDS)
     // Per-round diagnostics: why each round continued (or stopped) and who changed the proposal. Recorded
     // for every assessed round so a run is diagnosable from its outcome/export, not only the final state.
     const roundDiagnostics = [];
@@ -1050,6 +1062,10 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         // round is a confirmation round: a tightened prompt asks agents to only re-open on a genuine
         // decision change, so it stops here instead of drifting into marginal re-tweaks.
         const confirmationRound = lastAssessment?.awaitingConfirmation === true;
+        // Count consecutive confirmation rounds; reset the moment we're not in one. Once we've spent
+        // MAX_CONFIRMATION_ROUNDS of them still converged, accept the agreement instead of looping.
+        confirmationRoundsRun = confirmationRound ? confirmationRoundsRun + 1 : 0;
+        const confirmationsExhausted = confirmationRoundsRun >= MAX_CONFIRMATION_ROUNDS;
         const roundOutcome = await runResilientRound(roster().map((agent) => {
           const prompt = collaborationPrompt({
             session: snapshot,
@@ -1068,13 +1084,15 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMessages = await reconcileRound(roundOutcome, minSurvivors);
-        const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry);
+        const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry, confirmationsExhausted);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMessages, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
+        // canStop is checked FIRST: with confirmations exhausted, canStop can be true even while proposalChanged
+        // is true, and the old proposalChanged-first order would loop past it.
+        if (assessment.canStop) break;
         if (assessment.proposalChanged) proposalVersion += 1;
-        else if (assessment.canStop) break;
       }
     } else {
       // Anchor the debate to the answer already on the table so a "switch to debate" message
@@ -1109,6 +1127,8 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         // Confirmation round (see the collaboration loop): the previous round converged but carried a late
         // change the others hadn't seen, so this round gets the tightened confirm-only prompt.
         const confirmationRound = lastAssessment?.awaitingConfirmation === true;
+        confirmationRoundsRun = confirmationRound ? confirmationRoundsRun + 1 : 0;
+        const confirmationsExhausted = confirmationRoundsRun >= MAX_CONFIRMATION_ROUNDS;
         const rebuttalOutcome = await runResilientRound(roster().map((agent) => {
           const opponent = roster().find((key) => key !== agent);
           const prompt = debatePrompt({
@@ -1130,13 +1150,15 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "rebuttal"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMsgs = await reconcileRound(rebuttalOutcome, minSurvivors);
-        const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry);
+        const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry, confirmationsExhausted);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMsgs, assessment);
         itemRegistry = assessment.itemRegistry;
         completedRounds = round;
+        // canStop first (see the collaboration loop): with confirmations exhausted it can be true while
+        // proposalChanged is also true.
+        if (assessment.canStop) break;
         if (assessment.proposalChanged) proposalVersion += 1;
-        else if (assessment.canStop) break;
       }
     }
 

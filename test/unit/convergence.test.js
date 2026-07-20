@@ -120,6 +120,48 @@ test("a complete aligned round stops with an empty official registry", () => {
   assert.deepEqual(result.itemRegistry, []);
 });
 
+test("a converged valid majority seals on quorum despite one malformed control (3 agents)", () => {
+  const bad = parseAgentControl("<agent-control>{ broken json </agent-control>");
+  assert.equal(bad.valid, false);
+  // 2 valid + converged, 1 malformed → the round certifies on the valid majority instead of failing.
+  const result = assessRound([control(), control(), bad], 2);
+  assert.equal(result.sealedOnQuorum, true);
+  assert.equal(result.agreementState, "converged");
+  assert.equal(result.canStop, true);
+  assert.equal(result.controlsParseable, false); // not every control was valid — a quorum seal, not unanimous
+});
+
+test("a single valid control is NOT a quorum in a 2-agent round", () => {
+  const bad = parseAgentControl("<agent-control>{ broken </agent-control>");
+  const result = assessRound([control(), bad], 2);
+  assert.equal(result.sealedOnQuorum, false);
+  assert.equal(result.canStop, false);
+  assert.equal(result.agreementState, "unknown"); // one voice is never a majority to seal on
+});
+
+test("quorum does not seal when the valid majority hasn't converged", () => {
+  const bad = parseAgentControl("<agent-control>{ broken </agent-control>");
+  // 2 valid but one is still open → not converged → no seal even with a majority present.
+  const result = assessRound([control(), control({ convergence: "open" }), bad], 2);
+  assert.equal(result.sealedOnQuorum, false);
+  assert.notEqual(result.agreementState, "converged");
+  assert.equal(result.canStop, false);
+});
+
+test("quorum keeps repair-target indices aligned when the malformed control isn't last", () => {
+  // Malformed FIRST, then two valid terminal controls over an open item. The valid control that DOESN'T
+  // address the item must be flagged at ITS OWN raw index (2), not mis-attributed to the malformed control (0)
+  // or shifted by the certified-subset filtering.
+  const bad = parseAgentControl("<agent-control>{ broken </agent-control>");
+  const registry = [item("item-001", "user_decision", "Choose", "user", "provide_decision")];
+  const addresses = control({ goalStatus: "needs_user", itemProposals: [{ action: "keep_open", itemId: "item-001" }] });
+  const ignores = control({ goalStatus: "needs_user" }); // no proposal for item-001 → unaddressed_open_item
+  const result = assessRound([bad, addresses, ignores], 2, registry);
+  const target = result.repairTargets.find((repairTarget) => repairTarget.errorCodes.includes("unaddressed_open_item"));
+  assert.ok(target, "should flag the unaddressed open item");
+  assert.equal(target.controlIndex, 2); // the IGNORING valid control, not the malformed one at index 0
+});
+
 test("awaitingConfirmation gates one confirmation round when a converged round carried a late change", () => {
   // Agents run in parallel on one shared snapshot: a substantive change made this round isn't visible to
   // the others yet, so the round can't stop — but the NEXT round is an explicit confirmation round
@@ -135,6 +177,19 @@ test("awaitingConfirmation gates one confirmation round when a converged round c
   assert.equal(lateChange.awaitingConfirmation, true);
   assert.equal(lateChange.agreementState, "converged");
   assert.equal(lateChange.continueReason, "awaiting_confirmation");
+});
+
+test("with confirmations exhausted, a converged round stops despite a marginal substantiveDelta", () => {
+  const controls = [control(), control({ substantiveDelta: true })];
+  // Not exhausted → still only asks for confirmation (a genuine late delta keeps its propagation round).
+  assert.equal(assessRound(controls, 2, [], false).awaitingConfirmation, true);
+  assert.equal(assessRound(controls, 2, [], false).canStop, false);
+  // Exhausted → accept the converged agreement instead of looping.
+  const done = assessRound(controls, 2, [], true);
+  assert.equal(done.canStop, true);
+  assert.equal(done.awaitingConfirmation, false);
+  assert.equal(done.agreementState, "converged");
+  assert.equal(done.continueReason, "stopped");
 });
 
 test("a user decision stops discussion and produces one derived next step", () => {

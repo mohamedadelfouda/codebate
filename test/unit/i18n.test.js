@@ -110,6 +110,14 @@ test("discussionOutcomeReport renders the structured outcome in the reader's lan
   assert.match(discussionOutcomeReport(converged, "ar").text, /٣/);
   assert.deepEqual(discussionOutcomeReport(converged, "en").items, []);
 
+  // A converged outcome sealed on quorum names the excluded provider (mirrors the server report).
+  const onQuorum = {
+    outcomeVersion: 1, phase: "converged", completedRounds: 4, stoppedEarly: true, sealedOnQuorum: true,
+    roundDiagnostics: [{ round: 4, controlFailures: [{ agent: "cursor" }] }],
+  };
+  assert.match(discussionOutcomeReport(onQuorum, "en").text, /Sealed on the majority.*Cursor/);
+  assert.match(discussionOutcomeReport(onQuorum, "ar").text, /الأغلبية.*Cursor/);
+
   const early = { outcomeVersion: 1, phase: "converged", completedRounds: 2, stoppedEarly: true };
   assert.match(discussionOutcomeReport(early, "en").text, /remaining rounds were stopped/);
 
