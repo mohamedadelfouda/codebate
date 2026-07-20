@@ -188,6 +188,24 @@ test("Codex isolated home trusts the workspace only for executor run — kill-sw
   }
 });
 
+test("Codex isolated home turns web_search live for chat and keeps it disabled otherwise", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "codebate-codex-chat-web-"));
+  try {
+    const project = path.join(root, "project");
+    await fs.mkdir(path.join(project, ".git"), { recursive: true });
+    const chatHome = await prepareIsolatedCodexHome({ tempDir: path.join(root, "chat"), cwd: project, permission: "chat", sourceEnv: {} });
+    const chatConfig = await fs.readFile(path.join(chatHome, "config.toml"), "utf8");
+    // Chat is the project-less, web-enabled mode: the isolated config must AGREE with the -c CLI override
+    // (web_search=live) so the two never disagree. Chat stays read-only (untrusted workspace).
+    assert.match(chatConfig, /web_search = "live"/);
+    assert.match(chatConfig, /trust_level = "untrusted"/);
+    const readHome = await prepareIsolatedCodexHome({ tempDir: path.join(root, "read"), cwd: project, permission: "read", sourceEnv: {} });
+    assert.match(await fs.readFile(path.join(readHome, "config.toml"), "utf8"), /web_search = "disabled"/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Codex isolated home copies auth only and distrusts project config", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "codebate-codex-home-test-"));
   try {

@@ -30,9 +30,13 @@ const REVIEW_PERMISSIONS = new Set(["read", "chat", "planread"]);
 
 // Build the review argv. Pure, so the argv boundary (entry point first, plan mode, never --force) is
 // directly testable. Request args only ever append AFTER the descriptor's fixed prefix ([entryPoint]).
-export function buildCursorReviewArgs({ descriptor, model, platform = process.platform }) {
+export function buildCursorReviewArgs({ descriptor, model, platform = process.platform, web = false }) {
   // Windows has no OS sandbox (allowlist mode only); macOS/Linux run the reviewer OS-sandboxed.
-  const sandbox = platform === "win32" ? "disabled" : "enabled";
+  // Web (chat) mode needs network egress, so the sandbox is dropped there — but the orchestrator only
+  // enables web when NO project is attached (webOnly = phase==="chat" && !useProject), so the run happens
+  // in an EMPTY scratch cwd. Dropping the sandbox for web therefore exposes only that empty dir to the
+  // network, never the real project. Every non-web run keeps the sandbox enabled on macOS/Linux.
+  const sandbox = (web || platform === "win32") ? "disabled" : "enabled";
   const args = [
     ...descriptor.fixedPrefixArgs, // exactly [entryPoint] — validated; nothing may precede it
     "--print",
@@ -107,9 +111,12 @@ export async function runCursor({ prompt, config, cwd, onEvent, registerChild })
   const permission = config.permission || "read";
   if (!REVIEW_PERMISSIONS.has(permission)) throw new Error(`Unsupported Cursor permission: ${permission}`);
   const model = validateOption(config.model || "", "Cursor model");
+  // "chat" is the web-enabled, project-less mode (see registry/orchestrator): drop the OS sandbox so the
+  // reviewer can reach the network. It runs in an empty scratch cwd, so only that dir is exposed.
+  const web = permission === "chat";
 
   const descriptor = await resolveDescriptor();
-  const args = buildCursorReviewArgs({ descriptor, model });
+  const args = buildCursorReviewArgs({ descriptor, model, web });
   const stderr = [];
   const startedAt = Date.now();
   const processResult = await withIsolatedConfig((configDir) => runProcess({

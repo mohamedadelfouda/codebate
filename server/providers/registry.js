@@ -62,7 +62,10 @@ const providers = new Map([
     models: [],
     efforts: ["minimal", "low", "medium", "high", "xhigh"],
     capabilities: {
-      web: false,
+      // Web is offered ONLY in chat mode, and chat is gated on no project being attached
+      // (orchestrator: webOnly = phase==="chat" && !useProject). The adapter turns it on with
+      // `web_search=live` for the chat permission; every other mode stays `web_search=disabled`.
+      web: true,
       projectRead: true,
       projectTransport: "sandbox",
       connectors: false,
@@ -108,7 +111,11 @@ const providers = new Map([
     // No controlRepair mode: --mode plan confines writes but not READS, and on Windows the review runs
     // unsandboxed with network reachable (SECURITY.md). So a malformed Cursor control fails closed
     // (repair_not_supported) and is surfaced honestly — never repaired by a launched call.
-    capabilities: { web: false, projectRead: true, projectTransport: "sandbox", connectors: false, executeModes: [] },
+    // web:true is honoured ONLY in chat mode, which the orchestrator gates on no project being attached
+    // (scratch cwd, not the real project). The adapter drops the OS sandbox for that web run so the reviewer
+    // can reach the network — exposing only the empty scratch dir. Every non-web run keeps the sandbox
+    // enabled on macOS/Linux (Windows keeps its accepted open-network residual). See SECURITY.md.
+    capabilities: { web: true, projectRead: true, projectTransport: "sandbox", connectors: false, executeModes: [] },
     discoverModels: discoverCursorModels,
     run: runCursor,
   }],

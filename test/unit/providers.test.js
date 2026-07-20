@@ -34,3 +34,9 @@ test("Codex exposes one honest write boundary and Claude remains review-only", (
   assert.deepEqual(provider("codex").capabilities.executeModes, ["run"]);
   assert.deepEqual(provider("claude").capabilities.executeModes, []);
 });
+
+test("every provider can use web (chat mode) so a web task isn't answered by one provider only", () => {
+  for (const id of ["claude", "codex", "cursor"]) {
+    assert.equal(provider(id).capabilities.web, true, `${id} web`);
+  }
+});
