@@ -58,7 +58,6 @@ import { sessionMarkdown } from "./session-export.js";
 // re-checks reflect the working setup instead of the bare PATH lookup.
 async function detectAgents() {
   const detected = await Promise.all(providerIds().map(async (id) => {
-    const definition = provider(id);
     return [id, await providerReadiness(id, { refresh: true })];
   }));
   const githubReadiness = await githubConnectorReadiness({ refresh: true });
@@ -178,12 +177,23 @@ function json(res, status, data) {
 }
 
 async function readJson(req) {
-  let body = "";
+  // Collect raw bytes and cap by BYTE count (not UTF-16 code units), then decode ONCE over the concatenated
+  // buffer — decoding each chunk independently corrupts a multi-byte UTF-8 char split across a chunk boundary,
+  // and task text here is routinely Arabic. Oversize → 413, malformed JSON → 400 (was a generic 500).
+  const chunks = [];
+  let bytes = 0;
   for await (const chunk of req) {
-    body += chunk;
-    if (body.length > 1_000_000) throw new Error("Request body too large");
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buf.length;
+    if (bytes > 1_000_000) throw expectedApiError("request_too_large", "Request body too large", 413);
+    chunks.push(buf);
   }
-  return body ? JSON.parse(body) : {};
+  if (!bytes) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw expectedApiError("invalid_json", "Request body is not valid JSON", 400);
+  }
 }
 
 function emit(sessionId, event) {
@@ -250,9 +260,16 @@ async function serveStatic(urlPath, res) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  const parts = url.pathname.split("/").filter(Boolean);
   try {
+    // Parse INSIDE the try: a malformed Host header makes `new URL` throw, and outside the try that became an
+    // unhandled rejection with no response sent (the request hung). Now it's a clean 400.
+    let url;
+    try {
+      url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    } catch {
+      throw expectedApiError("invalid_request", "Malformed request URL or Host header", 400);
+    }
+    const parts = url.pathname.split("/").filter(Boolean);
     // Global host allowlist (DNS-rebinding defense) — reject before any routing or body read.
     if (!hostAllowed(req.headers.host, activePort)) {
       res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8", ...securityHeaders() });
