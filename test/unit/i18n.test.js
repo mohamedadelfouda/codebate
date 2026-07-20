@@ -135,6 +135,19 @@ test("discussionOutcomeReport renders the structured outcome in the reader's lan
   assert.match(discussionOutcomeReport(invalidControl, "en").text, /control data was missing or invalid/);
   assert.deepEqual(discussionOutcomeReport(invalidControl, "en").items, []);
 
+  // With a blocking provider recorded, the browser renderer NAMES it and surfaces raised points (mirrors the
+  // server's honest report) instead of the generic "control data was invalid" message.
+  const controlBlocked = {
+    outcomeVersion: 1, phase: "unresolved", completedRounds: 5, stopReason: "invalid_control",
+    proposedDisagreements: ["polling vs hook"],
+    roundDiagnostics: [{ round: 5, controlFailures: [{ agent: "codex" }] }],
+  };
+  const blockedEn = discussionOutcomeReport(controlBlocked, "en");
+  assert.match(blockedEn.text, /Codex/);
+  assert.match(blockedEn.text, /technical reason/);
+  assert.deepEqual(blockedEn.items, ["polling vs hook"]);
+  assert.match(discussionOutcomeReport(controlBlocked, "ar").text, /Codex/);
+
   // converged-but-incomplete (unfinished agreement) carries the pending items.
   const incomplete = { outcomeVersion: 1, phase: "unresolved", completedRounds: 4, agreementState: "converged", completionState: "incomplete", pendingItems: [{ text: "Write tests" }] };
   const inc = discussionOutcomeReport(incomplete, "ar");

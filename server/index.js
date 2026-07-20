@@ -17,6 +17,10 @@ import {
   retrySessionRecovery,
   deleteSessionRecovery,
   rootPath,
+  isProjectTrusted,
+  rememberTrustedProject,
+  listTrustedProjects,
+  forgetTrustedProject,
 } from "./store.js";
 import { approveProviderCommand, approvedProviderCommand, checkCommand, resolveAllowedCommand, runProcess, configureTrustedCliStore, hydrateTrustedProviderCommands } from "./process.js";
 import { discoverProviderCommands } from "./cli-discovery.js";
@@ -418,11 +422,26 @@ const server = http.createServer(async (req, res) => {
       const git = await isGitRepo(projectPath);
       const identity = await projectIdentity(projectPath);
       const canOpenPr = git ? await hasGitHubOrigin(identity.realPath) : false;
+      // Remembered consent: if the user already trusted THIS exact project (same fingerprint) before, attach it
+      // already-trusted instead of forcing the trust step again. Restricted to a STRONG identity — a git repo
+      // whose on-disk .git instance we could resolve (identity.gitInstance) — because a non-git/unresolvable
+      // folder's fingerprint is essentially path-only, so a reused path could otherwise silently re-trust
+      // unrelated content. Same condition gates the save below. assertTrustedProject still re-verifies at run time.
+      const strongIdentity = Boolean(identity.gitInstance);
+      const remembered = strongIdentity && await isProjectTrusted(identity.fingerprint);
       const project = await mutateSession(parts[2], (session) => {
         if ((session.executions || []).some((item) => !["merged", "pr_opened", "rejected", "blocked_secret"].includes(item.status))) {
           throw expectedApiError("pending_execution_decisions", "Resolve pending execution decisions before changing the attached project");
         }
-        session.project = { path: identity.realPath, fingerprint: identity.fingerprint, trusted: false, isGit: git, canOpenPr };
+        session.project = {
+          path: identity.realPath,
+          fingerprint: identity.fingerprint,
+          trusted: remembered,
+          isGit: git,
+          canOpenPr,
+          ...(remembered ? { trustedAt: new Date().toISOString(), trustedFromMemory: true } : {}),
+        };
+        if (remembered) recordDecision(session, { type: "project_trust", outcome: "trusted", metadata: { fingerprint: identity.fingerprint, fromMemory: true } });
         return structuredClone(session.project);
       });
       return json(res, 200, { project });
@@ -444,7 +463,19 @@ const server = http.createServer(async (req, res) => {
         recordDecision(session, { type: "project_trust", outcome: "trusted", metadata: { fingerprint: session.project.fingerprint } });
         return structuredClone(session.project);
       });
+      // Remember this consent so re-attaching the same project later skips the trust step — but ONLY for a
+      // strong identity (a git repo whose on-disk .git instance we could resolve; identity.gitInstance),
+      // the SAME condition the auto-apply on attach uses. A path-only fingerprint is never persisted.
+      if (identity.gitInstance) await rememberTrustedProject(project.fingerprint, project.path);
       return json(res, 200, { project });
+    }
+    if (parts[0] === "api" && parts[1] === "trusted-projects" && !parts[2] && req.method === "GET") {
+      return json(res, 200, { projects: await listTrustedProjects() });
+    }
+    if (parts[0] === "api" && parts[1] === "trusted-projects" && parts[2] && req.method === "DELETE") {
+      // Forget a remembered trust: the next attach of that project re-prompts for consent.
+      const projects = await forgetTrustedProject(decodeURIComponent(parts[2]));
+      return json(res, 200, { projects });
     }
     if (parts[0] === "api" && parts[1] === "sessions" && parts[2] && parts[3] === "execute" && req.method === "POST") {
       if (shuttingDown) return json(res, 503, apiErrorPayload("server_shutting_down", "Server is shutting down"));

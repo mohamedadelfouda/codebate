@@ -70,6 +70,13 @@ test("later collaboration rounds request a versioned control contract", () => {
   assert.match(prompt, /do not create a new item/i);
 });
 
+test("the control instruction discourages substantiveDelta over-signalling", () => {
+  const prompt = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  assert.match(prompt, /substantiveDelta=true ONLY when/);
+  assert.match(prompt, /forces another paid round/);
+  assert.match(prompt, /rephrasing, re-emphasis/);
+});
+
 test("a confirmation round adds a tightened instruction only when flagged", () => {
   const normal = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
   assert.doesNotMatch(normal, /CONFIRMATION ROUND/);
@@ -119,6 +126,45 @@ test("project grounding appears only when a snapshot is supplied", () => {
   const withProject = collaborationPrompt({ ...base, round: 1, projectSnapshot: "PROJECT_TREE_SENTINEL" });
   assert.doesNotMatch(withoutProject, /PROJECT_TREE_SENTINEL/);
   assert.match(withProject, /PROJECT_TREE_SENTINEL/);
+});
+
+test("a project-backed prompt forbids claiming verification against code not in the attached project", () => {
+  // Grounding integrity: agents hallucinated "verifying" a different codebase against the attached repo.
+  const withProject = collaborationPrompt({ ...base, round: 1, projectSnapshot: "TREE" });
+  assert.match(withProject, /THIS attached project/);
+  assert.match(withProject, /can't verify/i);
+  // Without a project there's no verification boundary to assert.
+  assert.doesNotMatch(collaborationPrompt({ ...base, round: 1 }), /THIS attached project/);
+  // The finalizer gets the same boundary.
+  const synth = synthesisPrompt({ ...base, mode: "collaboration", projectSnapshot: "TREE" });
+  assert.match(synth, /UNVERIFIED|list those claims as/);
+});
+
+test("every task-bearing prompt frames attachments as material, not new instructions", () => {
+  // Task-interpretation: an attached document/session must not become "the task" (the finalizer produced a
+  // brief about a plan inside an attachment instead of the analysis the user asked for).
+  for (const prompt of [
+    collaborationPrompt({ ...base, round: 1 }),
+    debatePrompt({ ...base, opponentLabel: "Codex", round: 1, independent: true }),
+    synthesisPrompt({ ...base, mode: "collaboration" }),
+  ]) {
+    assert.match(prompt, /\[Attached files\]/);
+    // Analysis-request vs explicit-delegation are distinguished (an attachment isn't always "the task").
+    assert.match(prompt, /explicitly delegated/);
+  }
+  // The finalizer additionally refocuses on the user's actual request if the discussion drifted.
+  assert.match(synthesisPrompt({ ...base, mode: "collaboration" }), /drifted/);
+});
+
+test("round-bearing prompts mark the orchestrator's round as authoritative but keep a completed prior run", () => {
+  // Resume: an INTERRUPTED run leaves stale "rounds completed" text; the agent trusts the given round. But a
+  // prior run that finished normally is still valid follow-up context and must not be discarded.
+  const collab = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  const debate = debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 2 });
+  assert.match(collab, /round 3 of THIS run/);
+  assert.match(collab, /interrupted and resumed/i);
+  assert.match(collab, /finished normally is still valid context/i);
+  assert.match(debate, /interrupted and resumed/i);
 });
 
 test("every phase forbids narrating tool usage or CLI errors in the reader-facing answer (H9)", () => {

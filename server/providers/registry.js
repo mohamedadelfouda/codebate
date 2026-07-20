@@ -67,6 +67,10 @@ const providers = new Map([
       projectTransport: "sandbox",
       connectors: false,
       executeModes: ["run"],
+      // Control Repair stays "unsupported": Codex read-only confines WRITES but still permits host-file READS
+      // (SECURITY.md — a scratch cwd is not a filesystem-read boundary), and the repair prompt embeds untrusted
+      // prior agent output that could steer a second Codex process into reading host data. So a malformed Codex
+      // control fails closed (repair_not_supported) and is surfaced honestly, never repaired by a launched call.
       controlRepair: "unsupported",
     },
     discoverModels: discoverCodexModels,
@@ -101,6 +105,9 @@ const providers = new Map([
     defaultModel: "",
     models: [],
     efforts: [],
+    // No controlRepair mode: --mode plan confines writes but not READS, and on Windows the review runs
+    // unsandboxed with network reachable (SECURITY.md). So a malformed Cursor control fails closed
+    // (repair_not_supported) and is surfaced honestly — never repaired by a launched call.
     capabilities: { web: false, projectRead: true, projectTransport: "sandbox", connectors: false, executeModes: [] },
     discoverModels: discoverCursorModels,
     run: runCursor,

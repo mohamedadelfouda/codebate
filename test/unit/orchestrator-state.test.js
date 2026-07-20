@@ -388,6 +388,9 @@ test("a dropped control block is repaired so genuine agreement is not lost", asy
 });
 
 test("control repair fails closed when the provider cannot guarantee a tool-free call", async (t) => {
+  // Codex read-only confines writes but still permits host-file reads (SECURITY.md), so its controlRepair is
+  // "unsupported": the gate must SKIP repair (repair_not_supported) rather than launch a call that could read
+  // host data — never fail a round harder, but never open that surface either.
   const session = await createSession("unsupported-control-repair");
   let claudeCalls = 0;
   let codexCalls = 0;
@@ -575,6 +578,7 @@ test("a converged round with a late change makes the next round a confirmation r
     await cleanupSession(session.id);
   }
 });
+
 
 test("a turn that fails after producing a valid control is recovered, not errored (H5)", async (t) => {
   const session = await createSession("timeout-recovery");

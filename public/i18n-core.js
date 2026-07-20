@@ -195,9 +195,23 @@ export function discussionOutcomeReport(outcome, language = "ar") {
 
   // Unfinished (no adoptable terminal agreement).
   if (outcome.stopReason === "invalid_control") {
-    return { items: [], text: en
-      ? `${round} rounds ended, but the agreement state could not be established because the control data was missing or invalid.`
-      : `انتهت ${round} جولات، لكن تعذّر اعتماد حالة الاتفاق لأن بيانات التحكم كانت ناقصة أو غير صالحة.` };
+    // Mirror the server's honest report: name the provider(s) whose control blocked certification (from the
+    // final round's diagnostics) and surface any raised points, so this reads as the technical hiccup it is —
+    // not a fabricated "the agents disagreed". Kept in sync with server/orchestrator.js controlBlameLine.
+    const diagnostics = Array.isArray(outcome.roundDiagnostics) ? outcome.roundDiagnostics : [];
+    const failures = (diagnostics.length && Array.isArray(diagnostics[diagnostics.length - 1].controlFailures))
+      ? diagnostics[diagnostics.length - 1].controlFailures : [];
+    const names = [...new Set(failures.map((failure) => failure && failure.agent).filter(Boolean))]
+      .map((agent) => agent.charAt(0).toUpperCase() + agent.slice(1));
+    const points = Array.isArray(outcome.proposedDisagreements) ? outcome.proposedDisagreements : [];
+    if (names.length) {
+      return { items: points, text: en
+        ? `The discussion stopped for a technical reason after ${round} rounds: ${names.join(", ")}'s control data couldn't be certified, so the agreement wasn't sealed. This is not a disagreement between the agents, and adding rounds won't fix it.`
+        : `توقّف النقاش لسبب تقني بعد ${round} جولات: تعذّر اعتماد بيانات التحكم من ${names.join("، ")}، فلم يُختم الاتفاق. هذا ليس خلافًا بين الوكلاء، وزيادة الجولات لن تحلّه.` };
+    }
+    return { items: points, text: en
+      ? `${round} rounds ended, but the agreement couldn't be certified because the control data was missing or invalid — a technical reason, not a disagreement.`
+      : `انتهت ${round} جولات، لكن تعذّر اعتماد الاتفاق لأن بيانات التحكم كانت ناقصة أو غير صالحة — سبب تقني، وليس خلافًا.` };
   }
   if (Array.isArray(outcome.disagreements) && outcome.disagreements.length) {
     return { items: [...outcome.disagreements], text: en
