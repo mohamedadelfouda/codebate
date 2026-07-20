@@ -49,6 +49,7 @@ import {
   trustedProviderCliPaths,
 } from "./provider-readiness.js";
 import { checkAllProviderUpdates } from "./update-check.js";
+import { checkAppUpdate, fetchLatestFromNpm } from "./app-update.js";
 import { diagnosticSnapshot, healthSnapshot } from "./diagnostics.js";
 import { sessionMarkdown } from "./session-export.js";
 
@@ -471,6 +472,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (parts[0] === "api" && parts[1] === "trusted-projects" && !parts[2] && req.method === "GET") {
       return json(res, 200, { projects: await listTrustedProjects() });
+    }
+    if (parts[0] === "api" && parts[1] === "app-update" && !parts[2] && req.method === "GET") {
+      // G1: notice-only npm-registry version check. Egress happens only when a client asks (the setup modal),
+      // never on page load; fail-soft (never a wrong "up to date"), and it never auto-updates anything.
+      return json(res, 200, await checkAppUpdate({ fetchLatest: fetchLatestFromNpm }));
     }
     if (parts[0] === "api" && parts[1] === "trusted-projects" && parts[2] && req.method === "DELETE") {
       // Forget a remembered trust: the next attach of that project re-prompts for consent.

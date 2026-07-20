@@ -50,6 +50,20 @@ export async function fetchLatestFromGitHub() {
   return parseSemver(JSON.parse(await readCapped(response, 64_000))?.tag_name || "");
 }
 
+// G1: distribution is npm now, so the latest-version source is the public npm registry. Same shape as the
+// GitHub fetcher — fixed URL, 5s timeout, 64 KB cap, redirects rejected, fail-soft (404 = never published).
+const NPM_URL = "https://registry.npmjs.org/codebate/latest";
+export async function fetchLatestFromNpm() {
+  const response = await fetch(NPM_URL, {
+    signal: AbortSignal.timeout(5000),
+    redirect: "error",
+    headers: { accept: "application/json", "user-agent": "codebate" },
+  });
+  if (response.status === 404) return null; // package/version not published
+  if (!response.ok) throw new Error(`npm responded ${response.status}`);
+  return parseSemver(JSON.parse(await readCapped(response, 64_000))?.version || "");
+}
+
 /**
  * Compare the current app version to the latest release. `fetchLatest` is injected — a fixture in tests, or
  * `fetchLatestFromGitHub` once the user has opted into update checks. Without it, returns "not checked" and

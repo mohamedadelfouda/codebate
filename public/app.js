@@ -1671,6 +1671,24 @@ function setConnected(ok) {
 async function pollHealth() { try { await api("/api/health"); setConnected(true); } catch { setConnected(false); } }
 
 /* ---------------- onboarding ---------------- */
+// G1: notice-only app-update banner. Asks the server to check the npm registry (egress only on this call, when
+// the setup modal opens — never on page load), and shows the "update available" banner. Fail-soft: any failure
+// or "up to date" simply hides the banner. It never auto-updates anything.
+async function loadAppUpdateBanner() {
+  const banner = $("appUpdateBanner");
+  const textEl = $("appUpdateText");
+  if (!banner || !textEl) return;
+  try {
+    const r = await api("/api/app-update");
+    if (r.updateAvailable && r.latest) {
+      textEl.textContent = t("updateAvailable")(r.latest);
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+  } catch { banner.hidden = true; }
+}
+
 // E5: list the projects the user has remembered-trusted, with a "forget" that re-requires consent next attach.
 async function renderTrustedProjects() {
   const section = $("trustedProjectsSection");
@@ -1724,6 +1742,7 @@ async function loadOnboard() {
   // /api/trusted-projects is healthy even when a provider or `gh` probe stalls. Running it here also means a
   // language switch (which re-calls loadOnboard) rebuilds the rows, re-localizing their dynamic aria-labels.
   void renderTrustedProjects();
+  void loadAppUpdateBanner(); // G1: notice-only npm update check, also independent of the agent-status probe
   const list = $("onboardList"); list.textContent = "...";
   try {
     const s = await api("/api/agents/status");
