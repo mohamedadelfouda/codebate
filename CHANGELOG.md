@@ -1,7 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 — 2026-07-20
 
+- Follow-up messages no longer lose the plan: the shared transcript pins the original task, the current round's full proposals, and the latest agreed outcome, and compacts in chronological order, so a "modify the plan" turn keeps the plan instead of drifting to a different subject. Each provider gets a transcript budget sized to its own context window.
+- A malformed `<agent-control>` block from one provider no longer sinks a real agreement: a converged valid **majority** seals it (the excluded control is named and its actual position reported as unknown), and the closing message names the blocking provider instead of the misleading "no agreement — raise the rounds". (Repairing Codex/Cursor control blocks stays fail-closed: their CLIs expose no tool-free mode.)
+- Over-signalled `substantiveDelta` is bounded — a converged discussion stops after its confirmation rounds instead of looping to the round limit, while a genuine late change still gets a round to reach the other agents.
+- Agents are told to verify only against the actually-attached project and to say so when a claim is about code that isn't there (closing a case where they reported "verified" against a different codebase); the finalizer answers the user's real request, treats attachments as material rather than new instructions, and represents every participant instead of collapsing an N-agent session into two sides.
+- Every prompt carries a hard same-language directive, so a provider replies in the user's language (Arabic ↔ English) instead of defaulting to English.
+- Project trust is remembered by identity fingerprint — a git repo with a real remote and a stable `.git` instance (device+inode) — so re-attaching a project you already trusted skips the consent step; attaching now flows straight into the single trust consent, and a new **Trusted projects** panel in Setup lists and forgets remembered projects.
+- A notice-only "update available" banner checks the npm registry when Setup opens (never on page load, never auto-updating) and shows `npm i -g codebate@latest` when a newer version exists.
 - `npx codebate` / `codebate` CLI launcher: run the local app with one command — no clone, no Electron installer. It starts the loopback server, opens the browser, and stores sessions in `~/.codebate` (override with `CODEBATE_RUNTIME_DIR`). npm publishing is opt-in via an `NPM_TOKEN` release secret; the package is zero-dependency and ships only the runtime code (`bin`/`server`/`public`/`desktop`).
 - Release discipline: a `RELEASING.md` runbook plus a tag ⇄ `package.json` ⇄ CHANGELOG consistency check (`scripts/check-release-version.mjs`) enforced in the tag-triggered build, so a tagged release cannot ship mislabeled or undocumented.
 - Collaboration round-summaries now render in the reader's language. The server persists the structured discussion outcome on the message and the browser renders the wording from it, so an English reader sees an English summary and an Arabic reader an Arabic one from the same run — instead of the previously hardcoded Arabic text.
