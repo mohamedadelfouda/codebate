@@ -2049,6 +2049,10 @@ async function attachProject() {
     st.className = "run-state";
     $("trustProject").hidden = trusted;
     if (currentSession) currentSession.project = r.project;
+    // E1: attaching a project IS the trust consent — go straight to the trust step (its confirm dialog is the
+    // single consent gate) instead of leaving a separate "Trust" button to hunt for. A project the user already
+    // trusted before comes back trusted and skips this; a cancelled confirm leaves the Trust button as a retry.
+    if (!trusted) await trustProject();
   } catch (e) { if (isCurrentSessionView(requestedId, requestedEpoch)) st.textContent = localizedFailure(e); }
 }
 async function trustProject() {
