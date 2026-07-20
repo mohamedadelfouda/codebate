@@ -28,6 +28,7 @@ const ERROR_MESSAGE_KEYS = Object.freeze({
   recovery_delete_confirmation_required: "errorRecoveryConfirmationRequired",
   execution_not_found: "errorNotFound",
   execution_already_decided: "errorExecutionAlreadyDecided",
+  too_many_streams: "errorTooManyStreams",
   execution_accept_failed: "errorExecutionAcceptFailed",
   execution_reject_failed: "errorExecutionRejectFailed",
   executor_unknown: "errorExecutorUnknown",
