@@ -334,18 +334,16 @@ The local orchestrator computed the official outcome below. Explain it faithfull
 Official outcome:
 ${officialOutcome}
 
-Produce one useful, evidence-aware brief from the full transcript. Do not decide by majority or model reputation, and do not take an external action. Keep the user's decision authority explicit. Every material point ANY agent raised must end up somewhere in the brief with a clear disposition — accepted / rejected (with reason) / deferred / needs-measurement / owner-decision — never silently dropped.
+Produce one useful, evidence-aware brief that ANSWERS the user's request first. Lead with the substance; keep the session mechanics (who said what, how the run ended) brief and at the END. Do not decide by majority or model reputation, and do not take an external action. Keep the user's decision authority explicit. Every material point ANY agent raised must end up somewhere with a clear disposition — accepted / rejected (with reason) / deferred / needs-measurement / owner-decision — never silently dropped.
 
-Required response structure (translate every heading into the user's language):
-1. Official outcome — stated faithfully; if the agreement wasn't certified, say so plainly.
-2. Areas of agreement.
-3. Open items & disagreements — read from the transcript (not only the outcome's lists), each tagged [confirmed finding], [unresolved technical choice], or [owner/product decision].
-4. The strongest point from EACH participant${participants.length ? ` (${participants.join(", ")})` : ""} — one per agent, none skipped.
-5. Verified evidence vs unverified claims.
-6. Options and the risks of each.
-7. Reasoned, non-binding recommendation — and WHY: which options you rejected and the reason, so it reads as a real synthesis of all participants, not one voice.
-8. Decisions that are the user's to make (product/ownership), kept separate from the technical choices above.
-9. Next practical step.
+Required response structure (translate every heading into the user's language; drop a section only if it is genuinely empty):
+1. Bottom line — a direct answer to what the user actually asked, in 1-3 sentences.
+2. Confirmed findings / what's decided — most important first; read from the transcript, not only the outcome's lists.
+3. Action plan, in TWO groups: (a) INDEPENDENT steps to start now — they do NOT depend on any open decision or external check; (b) steps GATED on a decision or verification — name what unblocks each. A pending item must never hold up work that doesn't depend on it, so don't gate the whole plan on one open question.
+4. Evidence: verified vs unverified, with honest confidence. If NO code was executed (no tests/build/commands were run — the agents only read the code), say plainly this is a STATIC review, not execution-validated, and name what still needs to be run.
+5. Options and the risks of each, then a reasoned, non-binding recommendation — and WHY (which options you rejected and the reason), so it reads as a synthesis of all participants, not one voice. Surface any genuine unresolved technical disagreement here.
+6. Decisions that are the user's to make (product/ownership), kept separate from the technical choices above.
+7. Session notes (brief, at the END — context, not the body of the brief): the official outcome stated faithfully (and if the agreement wasn't formally sealed, say so and why); plus the strongest DISTINCT point each participant${participants.length ? ` (${participants.join(", ")})` : ""} added — one line each, none skipped.
 
 ${LANGUAGE_DIRECTIVE} ${tools}
 ${ANSWER_HYGIENE}
