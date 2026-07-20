@@ -128,6 +128,35 @@ test("project grounding appears only when a snapshot is supplied", () => {
   assert.match(withProject, /PROJECT_TREE_SENTINEL/);
 });
 
+test("collaborative modes tell a web-less, project-less discussion to converge instead of looping on 'can't verify'", () => {
+  // A research task (no project) has no web in collaboration/debate, so agents must resolve the limitation
+  // in one turn (needs_user + route to Chat) rather than restating it every round and burning the session.
+  for (const prompt of [
+    collaborationPrompt({ ...base, round: 3, targetVersion: 2 }),
+    debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 2 }),
+  ]) {
+    assert.match(prompt, /web browsing is NOT available/i);
+    assert.match(prompt, /Chat mode|paste the page/i);
+    // The stop must use a backing kind the engine actually accepts for needs_user (user_decision), not
+    // out_of_scope — convergence.js rejects a needs_user claim not backed by a user_decision item.
+    assert.match(prompt, /needs_user with a user_decision item/);
+    assert.doesNotMatch(prompt, /out_of_scope item/);
+  }
+  // With a project attached the note is noise (the discussion is about the code) — omitted.
+  assert.doesNotMatch(collaborationPrompt({ ...base, round: 3, targetVersion: 2, projectSnapshot: "TREE" }), /web browsing is NOT available/i);
+  // Gated to when the control contract exists (round >= 2 / rebuttal): round 1 and a debate opening omit it,
+  // so an agent is never told to file a needs_user item before the <agent-control> syntax is introduced.
+  assert.doesNotMatch(collaborationPrompt({ ...base, round: 1 }), /web browsing is NOT available/i);
+  assert.doesNotMatch(debatePrompt({ ...base, opponentLabel: "Codex", round: 1, independent: true }), /web browsing is NOT available/i);
+});
+
+test("a later collaboration round pushes toward confirming/stopping, not manufacturing a delta", () => {
+  const later = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  assert.match(later, /CONFIRM alignment|so the session can stop/i);
+  assert.match(later, /would change the group's decision/i);
+  assert.match(later, /manufacture a delta/i);
+});
+
 test("a project-backed prompt forbids claiming verification against code not in the attached project", () => {
   // Grounding integrity: agents hallucinated "verifying" a different codebase against the attached repo.
   const withProject = collaborationPrompt({ ...base, round: 1, projectSnapshot: "TREE" });
