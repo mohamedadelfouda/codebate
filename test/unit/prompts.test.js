@@ -307,6 +307,23 @@ test("synthesis receives an immutable official outcome to explain", () => {
   assert.match(prompt, /"completionState":"needs_user"/);
 });
 
+test("the finalizer leads with the answer, splits independent vs decision-gated steps, and flags a static review", () => {
+  const synth = synthesisPrompt({ ...base, mode: "collaboration", participants: ["Claude", "Codex", "Cursor"] });
+  // Leads with the substance, not the session mechanics.
+  assert.match(synth, /Bottom line/);
+  assert.match(synth, /a direct answer to what the user actually asked/);
+  // Independent steps must not be blocked by a pending decision (a real session gated everything on one).
+  assert.match(synth, /INDEPENDENT steps to start now/);
+  assert.match(synth, /GATED on a decision/);
+  assert.match(synth, /must never hold up work that doesn't depend on it/);
+  // Honest about a review that didn't execute anything.
+  assert.match(synth, /STATIC review/);
+  // Session mechanics (official outcome + per-participant points) demoted to a brief END section — still
+  // representing every participant.
+  assert.match(synth, /Session notes \(brief, at the END/);
+  assert.match(synth, /strongest DISTINCT point each participant \(Claude, Codex, Cursor\)/);
+});
+
 test("chat describes only capabilities that are actually available", () => {
   const offline = chatPrompt({ ...base, capabilities: { web: false }, projectSnapshot: "" });
   assert.match(offline, /\[capability:web=disabled\]/);
