@@ -180,7 +180,22 @@ export function discussionOutcomeReport(outcome, language = "ar") {
             : `الوكلاء اتفقوا والمهمة اكتملت في الجولة ${round} — تم إيقاف الجولات المتبقية.`)
       : (en ? `The agents agreed and the task is complete at the final round (${round}).`
             : `الوكلاء اتفقوا والمهمة اكتملت في الجولة الأخيرة (${round}).`);
-    return { text, items: [] };
+    // Honest quorum note: the agreement was sealed on the valid MAJORITY because a provider's control block
+    // couldn't be certified. Name the excluded provider(s), mirroring the server report.
+    let quorum = "";
+    if (outcome.sealedOnQuorum) {
+      const diagnostics = Array.isArray(outcome.roundDiagnostics) ? outcome.roundDiagnostics : [];
+      const failures = (diagnostics.length && Array.isArray(diagnostics[diagnostics.length - 1].controlFailures))
+        ? diagnostics[diagnostics.length - 1].controlFailures : [];
+      const names = [...new Set(failures.map((failure) => failure && failure.agent).filter(Boolean))]
+        .map((agent) => agent.charAt(0).toUpperCase() + agent.slice(1));
+      if (names.length) {
+        quorum = en
+          ? ` (Sealed on the majority — ${names.join(", ")}'s control couldn't be read and was excluded; its actual position is unknown.)`
+          : ` (اتختم على الأغلبية — بيانات التحكم من ${names.join("، ")} ماتعتمدتش واستُبعدت، وموقفها الفعلي غير معروف.)`;
+      }
+    }
+    return { text: text + quorum, items: [] };
   }
   if (outcome.phase === "needs_user") {
     return { items: pendingItems, text: en
