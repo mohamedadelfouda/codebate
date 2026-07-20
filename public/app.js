@@ -1671,6 +1671,43 @@ function setConnected(ok) {
 async function pollHealth() { try { await api("/api/health"); setConnected(true); } catch { setConnected(false); } }
 
 /* ---------------- onboarding ---------------- */
+// E5: list the projects the user has remembered-trusted, with a "forget" that re-requires consent next attach.
+async function renderTrustedProjects() {
+  const section = $("trustedProjectsSection");
+  const list = $("trustedProjectsList");
+  if (!section || !list) return;
+  try {
+    const r = await api("/api/trusted-projects");
+    const projects = Array.isArray(r.projects) ? r.projects : [];
+    section.hidden = false;
+    list.innerHTML = "";
+    if (!projects.length) {
+      list.innerHTML = `<p class="trusted-projects-empty">${esc(t("trustedProjectsEmpty"))}</p>`;
+      return;
+    }
+    for (const p of projects) {
+      const path = String(p.path || p.fingerprint || "");
+      const row = document.createElement("div");
+      row.className = "trusted-project-row"; row.setAttribute("role", "listitem");
+      row.innerHTML = `<span class="trusted-project-path">${bdi(path, "ltr")}</span>`;
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "btn-ghost trusted-project-forget";
+      btn.dataset.i18n = "forget"; // so a live language switch re-translates it
+      btn.textContent = t("forget");
+      btn.setAttribute("aria-label", t("forgetProjectAria")(path));
+      btn.onclick = async () => {
+        btn.disabled = true;
+        try { await api(`/api/trusted-projects/${encodeURIComponent(p.fingerprint)}`, { method: "DELETE" }); await renderTrustedProjects(); }
+        catch { btn.disabled = false; }
+      };
+      row.appendChild(btn);
+      list.appendChild(row);
+    }
+  } catch {
+    section.hidden = true; // fail-soft: never let a trust-list hiccup break the setup modal
+  }
+}
+
 async function loadOnboard() {
   // Re-rendering the list discards the old buttons; clear any elapsed-timer intervals still ticking
   // on those detached nodes so they don't leak.
@@ -1696,6 +1733,7 @@ async function loadOnboard() {
     hint.classList.toggle("is-locked", !providersReady);
     markDoctorChecked(providersReady);
     refreshUpdateStates();
+    void renderTrustedProjects();
     // An inline control (Re-check / Verify & trust) that triggered this reload was just destroyed by the
     // re-render; keep focus inside the dialog so keyboard users aren't dropped to <body>.
     const modalEl = $("onboardModal");
