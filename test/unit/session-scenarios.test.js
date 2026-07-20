@@ -35,8 +35,8 @@ const missingControl = () => parseAgentControl("reader-facing prose with no agen
 const create = (kind, text, actor, action) => ({ action: "create", kind, text, requiredStep: { actor, action } });
 
 // Assess one decisive round through the real engine.
-const assess = (controls, { registry = [], targetVersion = 2, confirmationsExhausted = false } = {}) =>
-  assessRound(controls, targetVersion, registry, confirmationsExhausted);
+const assess = (controls, { registry = [], targetVersion = 2, confirmationsExhausted = false, invalidControlExhausted = false } = {}) =>
+  assessRound(controls, targetVersion, registry, confirmationsExhausted, invalidControlExhausted);
 
 // Scenario — "Sector Radar" (a no-web research task in collaboration). By round 3 all three
 // agents converged on the same conditional answer and flagged it as needing the user (needs_user
@@ -95,13 +95,18 @@ test("scenario · three-way with one unparseable control: seals on the valid maj
 // so the round is invalid_control and the session burns to the round limit despite the two readable
 // participants effectively agreeing in prose.
 //
-// CURRENT behaviour (characterization): no seal, and it keeps going. The right fix is NOT to seal on one
-// voice; it is an honest, bounded DEGRADED early-stop (ChatGPT's substantive_convergence) so the session
-// stops with a truthful "couldn't formally seal — one control unreadable" outcome instead of looping.
-// The degraded-seal PR flips the assertions below.
-test("scenario · two agents after a dropout, one unparseable control (CURRENT, pre-fix): cannot seal → burns rounds", () => {
-  const r = assess([control(), missingControl()]);
-  assert.equal(r.canStop, false);
-  assert.equal(r.agreementState, "unknown");
-  assert.equal(r.stopReason, "invalid_control");
+// FIXED (degraded-seal): a single round still can't formally seal (never seals on one voice), but once the
+// condition PERSISTS (invalidControlExhausted — the orchestrator bounds this at DEGRADED_STOP_ROUNDS
+// consecutive rounds) the session stops honestly with a degraded outcome instead of burning to the round
+// limit. The report says plainly the seal failed and which control was unreadable.
+test("scenario · two agents after a dropout, one unparseable control: waits, then stops honestly (degraded)", () => {
+  const waiting = assess([control(), missingControl()]);
+  assert.equal(waiting.canStop, false);
+  assert.equal(waiting.degradable, true);      // eligible, but not yet persisted
+  assert.equal(waiting.degradedStop, false);
+  assert.equal(waiting.agreementState, "unknown");
+
+  const persisted = assess([control(), missingControl()], { invalidControlExhausted: true });
+  assert.equal(persisted.degradedStop, true);
+  assert.equal(persisted.stopReason, "degraded_convergence");
 });

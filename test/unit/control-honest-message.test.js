@@ -17,6 +17,30 @@ function invalidControlOutcome(overrides = {}) {
   };
 }
 
+test("degraded stop reports an unsealed agreement that names the unreadable control — never a completed task", () => {
+  const outcome = {
+    phase: "converged",
+    completedRounds: 4,
+    stopReason: "degraded_convergence",
+    sealDegraded: true,
+    sealedOnQuorum: false,
+    stoppedEarly: true,
+    completionState: "incomplete",
+    pendingItems: [],
+    disagreements: [],
+    proposedDisagreements: [],
+    roundDiagnostics: [
+      { round: 3, controlFailures: [] },
+      { round: 4, controlFailures: [{ agent: "cursor", errorCodes: ["missing_control"], repairStatus: "skipped" }] },
+    ],
+  };
+  const report = discussionOutcomeReport(outcome);
+  assert.match(report, /Cursor/);                 // names the participant whose control was unreadable
+  assert.match(report, /مش مختوم رسميًا/);         // says the formal seal failed
+  assert.match(report, /تعذّر الختم الرسمي/);      // and why
+  assert.doesNotMatch(report, /المهمة اكتملت/);    // must NOT claim the task completed
+});
+
 test("invalid_control report names the blocking provider and never says 'raise the rounds'", () => {
   const outcome = invalidControlOutcome({
     roundDiagnostics: [

@@ -192,6 +192,43 @@ test("with confirmations exhausted, a converged round stops despite a marginal s
   assert.equal(done.continueReason, "stopped");
 });
 
+test("degraded stop: a round blocked only by an unreadable control, readable side converged, waits then stops when exhausted", () => {
+  const missing = parseAgentControl("reader-facing prose with no agent-control block");
+  // Two agents (e.g. after a dropout): one valid+converged, one unreadable. One valid voice can't seal, so the
+  // round is invalid_control — but it IS degradable (the readable side converged).
+  const before = assessRound([control(), missing], 2, [], false, false);
+  assert.equal(before.canStop, false);
+  assert.equal(before.degradable, true);
+  assert.equal(before.degradedStop, false);
+  assert.equal(before.stopReason, "invalid_control");
+  // Once the condition has persisted (the orchestrator bounds this), stop honestly with a degraded outcome.
+  const after = assessRound([control(), missing], 2, [], false, true);
+  assert.equal(after.degradedStop, true);
+  assert.equal(after.stopReason, "degraded_convergence");
+});
+
+test("degraded stop never fires when the readable side has not converged, or on a fully valid round", () => {
+  const missing = parseAgentControl("prose");
+  // Readable control is OPEN (a real unsettled position) — not degradable even when exhausted.
+  const open = assessRound([control({ convergence: "open" }), missing], 2, [], false, true);
+  assert.equal(open.degradable, false);
+  assert.equal(open.degradedStop, false);
+  // A readable control still carrying a substantive delta is not "converged" for the degraded test.
+  const delta = assessRound([control({ substantiveDelta: true }), missing], 2, [], false, true);
+  assert.equal(delta.degradable, false);
+  // A fully valid converged round seals normally and is never degraded.
+  const valid = assessRound([control(), control()], 2, [], false, true);
+  assert.equal(valid.degradable, false);
+  assert.equal(valid.degradedStop, false);
+  assert.equal(valid.canStop, true);
+  // A round invalid ONLY because of a version mismatch (both controls valid + readable) is NOT a degraded
+  // stop — nothing was unreadable, so it must not fire a "control unreadable" outcome.
+  const versionMismatch = assessRound([control(), control({ targetVersion: 1 })], 2, [], false, true);
+  assert.equal(versionMismatch.allValid, false);      // round didn't certify (version misaligned)
+  assert.equal(versionMismatch.degradable, false);    // but NOT via the degraded path
+  assert.equal(versionMismatch.degradedStop, false);
+});
+
 test("a user decision stops discussion and produces one derived next step", () => {
   const result = assessRound([
     control({ goalStatus: "needs_user", itemProposals: [create("user_decision", "Choose the rollout mode", "user", "provide_decision")] }),
