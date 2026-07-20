@@ -1211,10 +1211,12 @@ function nextStepsMarkup(outcome) {
 
 function correctionsMarkup(corrections) {
   if (!corrections.length) return "";
+  // One paragraph per correction so full-length text stays readable (pre-wrap keeps
+  // newlines) instead of several corrections running together as one inline block.
   const entries = corrections
-    .map((correction) => `${bdi(correction.agent, "ltr")}: <span dir="auto">${esc(correction.content)}</span>`)
-    .join(" · ");
-  return `<p><b>${esc(t("corrections"))}:</b> ${entries}</p>`;
+    .map((correction) => `<p dir="auto"><b>${bdi(correction.agent, "ltr")}:</b> ${esc(correction.content)}</p>`)
+    .join("");
+  return `<p class="context-meta"><b>${esc(t("corrections"))}:</b></p>${entries}`;
 }
 
 function roundMetricsMarkup(requested, completed) {
@@ -1251,7 +1253,7 @@ function renderContextColumn() {
   // The official outcome already classifies open items via pendingItemsMarkup above;
   // the legacy openPoints list only matters as a fallback when there's no outcome yet.
   const openPoints = outcome ? [] : [...new Set(discussion.flatMap((message) => message.control?.openPoints || []).filter(Boolean))];
-  const corrections = discussion.filter((message) => message.control?.substantiveDelta).map((message) => ({ agent: message.agent, content: String(message.content || "").slice(0, 140) }));
+  const corrections = discussion.filter((message) => message.control?.substantiveDelta).map((message) => ({ agent: message.agent, content: String(message.content || "") }));
 
   if (requested || completed || outcome || openPoints.length || corrections.length || finalReport) {
     col.appendChild(contextCard("goal", t("roundTracker"), decisionCardBody({ requested, completed, outcome, finalReport, corrections }), true));
@@ -2467,7 +2469,7 @@ function renderDecisionCards() {
         message.round ? `${esc(t("roundWord"))} ${bdi(formatLocaleNumber(lang, message.round))}` : "",
       ].filter(Boolean);
       const foot = footParts.length ? `<div class="dcard-foot">${footParts.join(" · ")}</div>` : "";
-      body = `<div class="dcard-body md">${renderMarkdown(String(message.content || "").slice(0, 600))}${foot}</div>`;
+      body = `<div class="dcard-body md">${renderMarkdown(String(message.content || ""))}${foot}</div>`;
     } else {
       body = `<div class="dcard-body"><p class="dcard-empty">${esc(t("dcardEmpty"))}</p></div>`;
     }
