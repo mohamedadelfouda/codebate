@@ -167,6 +167,22 @@ test("round-bearing prompts mark the orchestrator's round as authoritative but k
   assert.match(debate, /interrupted and resumed/i);
 });
 
+test("every prompt carries a hard same-language directive (D1)", () => {
+  // Cursor kept replying in English inside an Arabic conversation; the directive must be emphatic in every mode.
+  const prompts = [
+    collaborationPrompt({ ...base, round: 1 }),
+    collaborationPrompt({ ...base, round: 3, targetVersion: 2 }),
+    chatPrompt({ ...base }),
+    debatePrompt({ ...base, opponentLabel: "Codex", round: 1, independent: true }),
+    debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 2 }),
+    synthesisPrompt({ ...base, mode: "debate" }),
+  ];
+  for (const prompt of prompts) {
+    assert.match(prompt, /SAME LANGUAGE as the user's latest message/);
+    assert.match(prompt, /hard requirement/);
+  }
+});
+
 test("every phase forbids narrating tool usage or CLI errors in the reader-facing answer (H9)", () => {
   const prompts = {
     "collaboration opening": collaborationPrompt({ ...base, round: 1 }),

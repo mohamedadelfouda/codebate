@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { APP_VERSION, checkAppUpdate } from "../../server/app-update.js";
+import { APP_VERSION, checkAppUpdate, fetchLatestFromNpm } from "../../server/app-update.js";
 
 test("APP_VERSION is read from package.json as a semver", () => {
   assert.match(APP_VERSION, /^\d+\.\d+\.\d+$/);
@@ -31,4 +31,18 @@ test("checkAppUpdate fails soft (never a wrong 'up to date') when the fetch thro
   const r = await checkAppUpdate({ currentVersion: "1.0.0", fetchLatest: async () => { throw new Error("offline"); } });
   assert.equal(r.checkFailed, true);
   assert.equal(r.updateAvailable, false);
+});
+
+test("fetchLatestFromNpm parses the registry version, 404s to null, and throws on other errors (G1)", async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ version: "2.3.4" }), { status: 200 });
+    assert.equal(await fetchLatestFromNpm(), "2.3.4");
+    globalThis.fetch = async () => new Response("", { status: 404 }); // not published
+    assert.equal(await fetchLatestFromNpm(), null);
+    globalThis.fetch = async () => new Response("", { status: 500 });
+    await assert.rejects(() => fetchLatestFromNpm(), /npm responded 500/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

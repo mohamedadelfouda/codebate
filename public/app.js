@@ -1671,11 +1671,78 @@ function setConnected(ok) {
 async function pollHealth() { try { await api("/api/health"); setConnected(true); } catch { setConnected(false); } }
 
 /* ---------------- onboarding ---------------- */
+// G1: notice-only app-update banner. Asks the server to check the npm registry (egress only on this call, when
+// the setup modal opens — never on page load), and shows the "update available" banner. Fail-soft: any failure
+// or "up to date" simply hides the banner. It never auto-updates anything.
+async function loadAppUpdateBanner() {
+  const banner = $("appUpdateBanner");
+  const textEl = $("appUpdateText");
+  if (!banner || !textEl) return;
+  try {
+    const r = await api("/api/app-update");
+    if (r.updateAvailable && r.latest) {
+      textEl.textContent = t("updateAvailable")(r.latest);
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+  } catch { banner.hidden = true; }
+}
+
+// E5: list the projects the user has remembered-trusted, with a "forget" that re-requires consent next attach.
+async function renderTrustedProjects() {
+  const section = $("trustedProjectsSection");
+  const list = $("trustedProjectsList");
+  if (!section || !list) return;
+  const err = $("trustedProjectsError");
+  if (err) { err.hidden = true; err.textContent = ""; } // clear any stale error on every (re)load, incl. success-after-failure
+  try {
+    const r = await api("/api/trusted-projects");
+    const projects = Array.isArray(r.projects) ? r.projects : [];
+    section.hidden = false;
+    list.innerHTML = "";
+    if (!projects.length) {
+      const empty = document.createElement("p");
+      empty.className = "trusted-projects-empty";
+      empty.textContent = t("trustedProjectsEmpty");
+      list.appendChild(empty);
+      return;
+    }
+    for (const p of projects) {
+      const path = String(p.path || p.fingerprint || "");
+      const row = document.createElement("div");
+      row.className = "trusted-project-row"; row.setAttribute("role", "listitem");
+      row.innerHTML = `<span class="trusted-project-path">${bdi(path, "ltr")}</span>`;
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "btn-ghost trusted-project-forget";
+      btn.dataset.i18n = "forget"; // so a live language switch re-translates it
+      btn.textContent = t("forget");
+      btn.setAttribute("aria-label", t("forgetProjectAria")(path));
+      btn.onclick = async () => {
+        btn.disabled = true;
+        const err = $("trustedProjectsError");
+        if (err) { err.hidden = true; err.textContent = ""; }
+        try { await api(`/api/trusted-projects/${encodeURIComponent(p.fingerprint)}`, { method: "DELETE" }); await renderTrustedProjects(); }
+        catch (e) { btn.disabled = false; if (err) { err.textContent = localizedFailure(e); err.hidden = false; } } // revoking trust must report why it failed
+      };
+      row.appendChild(btn);
+      list.appendChild(row);
+    }
+  } catch {
+    section.hidden = true; // fail-soft: never let a trust-list hiccup break the setup modal
+  }
+}
+
 async function loadOnboard() {
   // Re-rendering the list discards the old buttons; clear any elapsed-timer intervals still ticking
   // on those detached nodes so they don't leak.
   for (const timer of updateTimers.values()) clearInterval(timer);
   updateTimers.clear();
+  // Load the trusted-project list INDEPENDENTLY of the (slow, sometimes-hanging) agent-status probe below —
+  // /api/trusted-projects is healthy even when a provider or `gh` probe stalls. Running it here also means a
+  // language switch (which re-calls loadOnboard) rebuilds the rows, re-localizing their dynamic aria-labels.
+  void renderTrustedProjects();
+  void loadAppUpdateBanner(); // G1: notice-only npm update check, also independent of the agent-status probe
   const list = $("onboardList"); list.textContent = "...";
   try {
     const s = await api("/api/agents/status");
@@ -2011,6 +2078,10 @@ async function attachProject() {
     st.className = "run-state";
     $("trustProject").hidden = trusted;
     if (currentSession) currentSession.project = r.project;
+    // E1: attaching a project IS the trust consent — go straight to the trust step (its confirm dialog is the
+    // single consent gate) instead of leaving a separate "Trust" button to hunt for. A project the user already
+    // trusted before comes back trusted and skips this; a cancelled confirm leaves the Trust button as a retry.
+    if (!trusted) await trustProject();
   } catch (e) { if (isCurrentSessionView(requestedId, requestedEpoch)) st.textContent = localizedFailure(e); }
 }
 async function trustProject() {

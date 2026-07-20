@@ -7,6 +7,10 @@ function clean(text) {
 // agent's tooling, so every phase forbids that narration.
 const ANSWER_HYGIENE = `Your reply is the answer itself, not a report on how you produced it: never narrate tool calls, permission prompts, or CLI/shell errors (for example "the shell was rejected" or "I don't have permission to run that"). If something you would have checked isn't available, work with what you have and, where it matters, state briefly what you couldn't verify.`;
 
+// D1: a hard, prominent language directive. A soft "reply in the same language" line still let providers
+// (Cursor especially) default to English inside an Arabic conversation, so make it emphatic and unmissable.
+const LANGUAGE_DIRECTIVE = `Write your ENTIRE reply in the SAME LANGUAGE as the user's latest message — if they wrote in Arabic, answer in Arabic; if in English, answer in English. This is a hard requirement, not a stylistic preference.`;
+
 // Agents kept treating an attached document as "the task", drifting from what the user actually asked (e.g.
 // "analyze this failed session" turned into a review of the plan pasted inside it). Keep the user's own
 // instruction as the task; attachments are material to act ON, not new instructions or a replacement subject.
@@ -216,7 +220,7 @@ You're not competing. You're building one answer that's better than any of you w
 
 ${guidance}
 ${control}
-Reply in the same language the user last used. You don't literally share a session with the other models — the local orchestrator is handing you the shared transcript, so don't pretend otherwise. ${tools}
+${LANGUAGE_DIRECTIVE} You don't literally share a session with the other models — the local orchestrator is handing you the shared transcript, so don't pretend otherwise. ${tools}
 ${ANSWER_HYGIENE}
 ${TASK_INTERPRETATION}
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
@@ -240,7 +244,7 @@ Your assigned role: ${role || "Assistant"}.
 
 This is a normal chat: answer the user's latest message directly and helpfully in your own voice. ${web} ${project} The other agents are answering the same message separately — do not coordinate with, imitate, or wait for their answers.
 
-Answer in the same language as the user's latest message. Do not claim you directly share a provider-side session with another model; the local orchestrator is supplying the shared transcript. Do not modify files or run shell commands.
+${LANGUAGE_DIRECTIVE} Do not claim you directly share a provider-side session with another model; the local orchestrator is supplying the shared transcript. Do not modify files or run shell commands.
 ${ANSWER_HYGIENE}
 
 Latest user message [user-provided]:
@@ -282,7 +286,7 @@ This is round ${round} of THIS run, with room for up to ${totalRounds} — but t
 
 ${guidance}
 ${control}
-Reply in the same language the user last used. ${tools}
+${LANGUAGE_DIRECTIVE} ${tools}
 ${ANSWER_HYGIENE}
 ${TASK_INTERPRETATION}
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}
@@ -330,7 +334,7 @@ Required response structure (translate every heading into the user's language):
 8. Decisions that are the user's to make (product/ownership), kept separate from the technical choices above.
 9. Next practical step.
 
-Use the language of the user's latest message. ${tools}
+${LANGUAGE_DIRECTIVE} ${tools}
 ${ANSWER_HYGIENE}
 ${TASK_INTERPRETATION} Your brief must answer THAT request. If the discussion drifted from what the user actually asked (e.g. they asked you to analyze an attached session, but the agents reviewed the plan inside it instead), say so plainly and refocus the brief on the real request — don't present the drift as if it were the answer.
 ${projectSnapshot ? `\n${projectSnapshot}\n` : ""}

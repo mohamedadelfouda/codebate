@@ -463,6 +463,17 @@ details.tech pre { margin-top: 8px; background: var(--bg); border: 1px solid var
 .modal-sub { color: var(--muted); font-size: 13px; margin-top: -4px; }
 .onboard-lang { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0; padding: 10px 14px; border: 1px solid var(--line-soft); border-radius: 11px; background: var(--bg); }
 .onboard-lang .field-label { font-weight: 600; color: var(--text); }
+.trusted-projects { margin-top: 18px; border-top: 1px solid var(--line-soft); padding-top: 14px; }
+.trusted-projects-title { font-size: 13px; font-weight: 600; margin: 0 0 4px; }
+.trusted-projects-sub { color: var(--faint); font-size: 11.5px; margin: 0 0 10px; }
+.trusted-projects-list { display: flex; flex-direction: column; gap: 6px; }
+.trusted-projects-empty { color: var(--faint); font-size: 12px; margin: 0; }
+.trusted-project-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--bg); }
+.trusted-project-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; direction: ltr; text-align: start; }
+.trusted-project-forget { flex: none; }
+.trusted-projects-error { color: var(--danger, #c0392b); font-size: 12px; margin: 8px 0 0; }
+.app-update-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; padding: 10px 14px; border: 1px solid var(--accent-line, var(--line)); border-radius: 10px; background: var(--surface); font-size: 12.5px; }
+.app-update-cmd { font-family: ui-monospace, monospace; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 6px; padding: 2px 8px; direction: ltr; }
 .onboard-list { display: flex; flex-direction: column; gap: 8px; }
 .onboard-row { display: flex; align-items: center; gap: 11px; padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: 11px; background: var(--bg); }
 .onboard-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--faint); flex: none; }
