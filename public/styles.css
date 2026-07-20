@@ -471,6 +471,7 @@ details.tech pre { margin-top: 8px; background: var(--bg); border: 1px solid var
 .trusted-project-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--bg); }
 .trusted-project-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; direction: ltr; text-align: start; }
 .trusted-project-forget { flex: none; }
+.trusted-projects-error { color: var(--danger, #c0392b); font-size: 12px; margin: 8px 0 0; }
 .onboard-list { display: flex; flex-direction: column; gap: 8px; }
 .onboard-row { display: flex; align-items: center; gap: 11px; padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: 11px; background: var(--bg); }
 .onboard-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--faint); flex: none; }

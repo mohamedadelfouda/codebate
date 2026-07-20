@@ -1697,8 +1697,10 @@ async function renderTrustedProjects() {
       btn.setAttribute("aria-label", t("forgetProjectAria")(path));
       btn.onclick = async () => {
         btn.disabled = true;
+        const err = $("trustedProjectsError");
+        if (err) { err.hidden = true; err.textContent = ""; }
         try { await api(`/api/trusted-projects/${encodeURIComponent(p.fingerprint)}`, { method: "DELETE" }); await renderTrustedProjects(); }
-        catch { btn.disabled = false; }
+        catch (e) { btn.disabled = false; if (err) { err.textContent = localizedFailure(e); err.hidden = false; } } // revoking trust must report why it failed
       };
       row.appendChild(btn);
       list.appendChild(row);
@@ -1713,6 +1715,10 @@ async function loadOnboard() {
   // on those detached nodes so they don't leak.
   for (const timer of updateTimers.values()) clearInterval(timer);
   updateTimers.clear();
+  // Load the trusted-project list INDEPENDENTLY of the (slow, sometimes-hanging) agent-status probe below —
+  // /api/trusted-projects is healthy even when a provider or `gh` probe stalls. Running it here also means a
+  // language switch (which re-calls loadOnboard) rebuilds the rows, re-localizing their dynamic aria-labels.
+  void renderTrustedProjects();
   const list = $("onboardList"); list.textContent = "...";
   try {
     const s = await api("/api/agents/status");
@@ -1733,7 +1739,6 @@ async function loadOnboard() {
     hint.classList.toggle("is-locked", !providersReady);
     markDoctorChecked(providersReady);
     refreshUpdateStates();
-    void renderTrustedProjects();
     // An inline control (Re-check / Verify & trust) that triggered this reload was just destroyed by the
     // re-render; keep focus inside the dialog so keyboard users aren't dropped to <body>.
     const modalEl = $("onboardModal");
