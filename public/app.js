@@ -1676,13 +1676,18 @@ async function renderTrustedProjects() {
   const section = $("trustedProjectsSection");
   const list = $("trustedProjectsList");
   if (!section || !list) return;
+  const err = $("trustedProjectsError");
+  if (err) { err.hidden = true; err.textContent = ""; } // clear any stale error on every (re)load, incl. success-after-failure
   try {
     const r = await api("/api/trusted-projects");
     const projects = Array.isArray(r.projects) ? r.projects : [];
     section.hidden = false;
     list.innerHTML = "";
     if (!projects.length) {
-      list.innerHTML = `<p class="trusted-projects-empty">${esc(t("trustedProjectsEmpty"))}</p>`;
+      const empty = document.createElement("p");
+      empty.className = "trusted-projects-empty";
+      empty.textContent = t("trustedProjectsEmpty");
+      list.appendChild(empty);
       return;
     }
     for (const p of projects) {
