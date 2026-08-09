@@ -46,7 +46,7 @@
     "@electron-forge/maker-rpm": "7.11.2",
     "@electron-forge/maker-squirrel": "7.11.2",
     "@electron-forge/maker-zip": "7.11.2",
-    "electron": "43.1.1",
+    "electron": "43.3.0",
     "electron-winstaller": "5.4.4",
     "eslint": "10.7.0"
   }
