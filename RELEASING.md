@@ -32,7 +32,7 @@ regressions run on Linux.
    pnpm run test:browser
    node scripts/check-release-version.mjs v<version>
    ```
-   `pnpm run ci` covers syntax, lint, unit/git tests, integration tests, and source/CLI smoke tests.
+   `pnpm run ci` covers syntax, lint, unit/git tests, integration tests, and source/CLI/npm-package smoke tests.
 5. **Commit** the version + CHANGELOG bump to `main` through the normal PR/CI path.
 6. **Tag and push:**
    ```bash
@@ -77,15 +77,19 @@ The npm dist-tag follows the **semantic version**, not the desktop-signing state
 This distinction is important because the in-app updater reads npm's `/codebate/latest` endpoint and the
 UI recommends `codebate@latest`. A release candidate must therefore never advance the `latest` dist-tag.
 
-## Source-run users
+## Source-run and npm-lifecycle users
 
 Source users update with `git pull`. `pnpm start` runs `scripts/source-preflight.mjs` before the server, so
 Node < 22 fails fast with a clear error and a missing Git install is surfaced as a non-blocking warning.
 Session documents are schema-versioned and migrated on load (with a backup of the pre-migration file), so
 `git pull --ff-only` onto a newer tag or `main` keeps existing sessions readable.
 
-`npx codebate` / globally installed npm users continue through the packaged CLI launcher and do not depend
-on the source-only preflight script being shipped in the npm tarball.
+The npm package **also ships `scripts/source-preflight.mjs`** because npm's standard `start` lifecycle uses
+the same `package.json` command. The smoke suite runs `npm pack --dry-run --json` and asserts that this
+preflight plus the runtime entry points are actually present in the tarball, so the package whitelist
+cannot silently break `npm start` again.
+
+`npx codebate` / globally installed npm users continue through the packaged CLI launcher (`bin/codebate.mjs`).
 
 ## Rollback / yanking a bad release
 
@@ -105,6 +109,8 @@ published tag:
 
 - **PR/main gate** — syntax, lint, unit/git, integration, and smoke suites run on Windows/macOS/Linux;
   coverage thresholds and browser regressions run on Linux.
+- **Packaged lifecycle completeness** — the npm-package smoke checks the real `npm pack --dry-run` manifest,
+  including the preflight referenced by `npm start`.
 - **No tagged release before tests pass** — the native build matrix runs the release gate and the publish
   job depends on all three build jobs.
 - **Tag ⇄ version ⇄ CHANGELOG** — `scripts/check-release-version.mjs` fails the tag workflow unless the tag,
