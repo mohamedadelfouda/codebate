@@ -29,6 +29,10 @@ function isInside(root, candidate) {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
+function canonicalTemp(prefix) {
+  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
 test("the disposable clone is created OUT of the project tree, in the app exec-workspaces bucket", async () => {
   const dir = repository();
   const bucket = join(executionWorkspacesRoot(), projectWorkspaceKey(dir));
@@ -67,7 +71,10 @@ test("removeWorktree still cleans a legacy in-tree clone record (backward compat
 });
 
 test("the orphan sweep removes a session-less bucket, keeps a known one, ignores non-buckets", async () => {
-  const root = mkdtempSync(join(tmpdir(), "ar-exec-sweep-"));
+  // sweepOrphanExecutionWorkspaces intentionally rejects any base/child path whose realpath differs
+  // before recursive deletion. Canonicalize the throwaway fixture exactly as production does; macOS
+  // commonly exposes /var as /private/var and Windows runners may expose equivalent temp aliases.
+  const root = canonicalTemp("ar-exec-sweep-");
   const knownKey = "a".repeat(16);
   const orphanKey = "b".repeat(16);
   const notABucket = "sessions"; // wrong shape (not 16-hex) — must be left untouched
@@ -87,8 +94,8 @@ test("the orphan sweep removes a session-less bucket, keeps a known one, ignores
 });
 
 test("the orphan sweep refuses to follow a symlinked bucket to delete its target", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "ar-exec-sweep-link-"));
-  const secret = mkdtempSync(join(tmpdir(), "ar-exec-secret-"));
+  const root = canonicalTemp("ar-exec-sweep-link-");
+  const secret = canonicalTemp("ar-exec-secret-");
   writeFileSync(join(secret, "keep.txt"), "must survive");
   const linkPath = join(root, "c".repeat(16)); // bucket-shaped name that is actually a symlink/junction
   try {
