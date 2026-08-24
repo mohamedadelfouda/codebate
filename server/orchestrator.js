@@ -524,7 +524,6 @@ async function settlePendingProviders(state, timeoutMs = 5000) {
   const settled = Promise.allSettled([...state.pending]).then(() => true);
   const timedOut = new Promise((resolve) => {
     timeoutHandle = setTimeout(() => resolve(false), timeoutMs);
-    timeoutHandle.unref?.();
   });
   const completed = await Promise.race([settled, timedOut]);
   clearTimeout(timeoutHandle);
