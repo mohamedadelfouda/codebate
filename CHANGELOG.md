@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Restored enforced GitHub CI: syntax, lint, unit/git, integration, and smoke suites run on Windows/macOS/Linux; coverage thresholds and real browser regressions run on Linux.
+- Restored the tag-triggered native release pipeline for Windows, macOS, and Linux, including tag/version/CHANGELOG validation, optional code signing/notarization, GitHub Release artifacts, and opt-in idempotent npm publishing. Missing signing secrets can only produce a pre-release, never a stable release.
+- `pnpm start` now runs the source preflight before starting the server, so the documented source-start path can no longer bypass the Node/Git host checks.
+- Added a real-session regression for the 2026-07-25 provider-503 case: the failed provider is retried once and dropped, the two survivors converge through the confirmation round, and a five-round session stops at round 3 instead of burning the remaining rounds.
+
 ## 0.2.3 — 2026-07-20
 
 - Web search now works in Chat for **all three** providers, not just Claude: Codex and Cursor can search the web too, so a research task no longer gets real data from one provider and "web access is not available" from the others. Web stays scoped to project-less Chat by design.
@@ -23,7 +30,7 @@
 - A notice-only "update available" banner checks the npm registry when Setup opens (never on page load, never auto-updating) and shows `npm i -g codebate@latest` when a newer version exists.
 - `npx codebate` / `codebate` CLI launcher: run the local app with one command — no clone, no Electron installer. It starts the loopback server, opens the browser, and stores sessions in `~/.codebate` (override with `CODEBATE_RUNTIME_DIR`). npm publishing is opt-in via an `NPM_TOKEN` release secret; the package is zero-dependency and ships only the runtime code (`bin`/`server`/`public`/`desktop`).
 - Release discipline: a `RELEASING.md` runbook plus a tag ⇄ `package.json` ⇄ CHANGELOG consistency check (`scripts/check-release-version.mjs`) enforced in the tag-triggered build, so a tagged release cannot ship mislabeled or undocumented.
-- Collaboration round-summaries now render in the reader's language. The server persists the structured discussion outcome on the message and the browser renders the wording from it, so an English reader sees an English summary and an Arabic reader an Arabic one from the same run — instead of the previously hardcoded Arabic text.
+- Collaboration round-summaries now render in the reader's language. The server persists the structured discussion outcome on the message and the browser renders the wording from it, so an English reader sees an English summary and an Arabic reader sees an Arabic one from the same run — instead of the previously hardcoded Arabic text.
 - The onboarding update control now reflects real state per agent CLI: **Update** (with the target version) when a newer release exists on the npm registry, a passive **✓ Updated** when already current, and a ticking elapsed timer while updating. Falls back to a plain Update affordance when offline.
 - Sidebar, room-flow, and context columns are now drag-resizable (with a keyboard-operable splitter) and the topbar ☰/⇥/◫ buttons collapse/expand them on desktop instead of only opening mobile overlays; widths and collapse state persist. The rail brand name no longer truncates.
 - A provider installed only as an npm/pnpm/bun shim (such as Codex on Windows, where PATH exposes only `.cmd`/`.ps1` shims) is now auto-detected: Codebate discovers the bundled native executable at its known package layout, verifies it runs, and trusts it automatically — no manual Trust & check for that curated path. Onboarding shows an "auto-detected" note. An explicit command override is never superseded, and an arbitrary path the user supplies still requires Trust & check.
