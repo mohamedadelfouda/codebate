@@ -4,6 +4,7 @@
 
 - Restored enforced GitHub CI: syntax, lint, unit/git, integration, and smoke suites run on Windows/macOS/Linux; coverage thresholds and real browser regressions run on Linux.
 - Restored the tag-triggered native release pipeline for Windows, macOS, and Linux, including tag/version/CHANGELOG validation, optional code signing/notarization, GitHub Release artifacts, and opt-in idempotent npm publishing. Missing signing secrets can only produce a pre-release, never a stable release.
+- Semantic prereleases such as `0.3.0-rc.1` now publish to npm under the `next` dist-tag instead of the default `latest`, so the stable update checker and `codebate@latest` never advertise an RC as stable.
 - `pnpm start` now runs the source preflight before starting the server, so the documented source-start path can no longer bypass the Node/Git host checks.
 - Added a real-session regression for the 2026-07-25 provider-503 case: the failed provider is retried once and dropped, the two survivors converge through the confirmation round, and a five-round session stops at round 3 instead of burning the remaining rounds.
 
