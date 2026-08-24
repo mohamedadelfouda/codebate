@@ -13,7 +13,7 @@ pnpm make
 
 Artifacts are written under `out/`, which is ignored by Git. The Windows Squirrel lifecycle creates or removes the application shortcut during install, update, and uninstall.
 
-For an offline/local Windows build, Forge reuses `.electron-cache/electron-v43.1.0-win32-x64.zip` when present. That cache, Corepack files, pnpm stores, tests, and repository-only tooling are excluded from the packaged ASAR. `server/windows-job-runner.ps1` is deliberately unpacked because PowerShell must read it from the real filesystem.
+For an offline/local Windows build, Forge reuses `.electron-cache/electron-v43.1.1-win32-x64.zip` when present. That cache, Corepack files, pnpm stores, tests, and repository-only tooling are excluded from the packaged ASAR. `server/windows-job-runner.ps1` is deliberately unpacked because PowerShell must read it from the real filesystem.
 
 ## Signing
 
