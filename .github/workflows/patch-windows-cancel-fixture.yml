@@ -1,0 +1,39 @@
+name: Apply Windows cancellation fixture fix
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'fix/stabilization-ci-release' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/stabilization-ci-release
+      - name: Canonicalize the execution bucket helper exactly like the Windows-safe fixtures
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('test/git/exec-cancellation.test.js')
+          text = path.read_text()
+          old = 'projectWorkspaceKey(realpathSync(dir))'
+          new = 'projectWorkspaceKey(realpathSync.native(dir))'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one legacy helper expression, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+      - name: Commit the fixture fix and remove this one-shot workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/patch-windows-cancel-fixture.yml
+          git add test/git/exec-cancellation.test.js
+          git commit -m "test(exec): canonicalize Windows cancellation workspace lookup"
+          git push origin HEAD:fix/stabilization-ci-release
