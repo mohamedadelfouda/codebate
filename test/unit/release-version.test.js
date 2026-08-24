@@ -1,8 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { checkReleaseVersion } from "../../scripts/check-release-version.mjs";
 
 const CHANGELOG = "# Changelog\n\n## Unreleased\n\n- wip\n\n## 0.3.0 — 2026-07-20\n\n- thing\n\n## 0.2.1 — 2026-07-15\n\n- older\n";
+const testDir = dirname(fileURLToPath(import.meta.url));
 
 test("release check passes when tag, package version, and CHANGELOG all agree", () => {
   assert.deepEqual(checkReleaseVersion({ tag: "v0.3.0", version: "0.3.0", changelog: CHANGELOG }), { ok: true, version: "0.3.0" });
@@ -35,4 +39,13 @@ test("release check does not treat a version as a prefix of another (0.3.0 vs 0.
   // A "## 0.3.0-rc.1" section must NOT satisfy a v0.3.0 release (word boundary after the exact version).
   const cl = "# Changelog\n\n## 0.3.0-rc.1 — 2026-07-20\n\n- rc only\n";
   assert.equal(checkReleaseVersion({ tag: "v0.3.0", version: "0.3.0", changelog: cl }).ok, false);
+});
+
+test("tag workflow publishes semver prereleases under npm next, never latest", () => {
+  const workflow = readFileSync(join(testDir, "../../.github/workflows/desktop-build.yml"), "utf8");
+  assert.match(workflow, /npm_tag=latest/);
+  assert.match(workflow, /if \[\[ "\$\{GITHUB_REF_NAME\}" == \*-\* \]\]; then[\s\S]*?npm_tag=next/);
+  assert.match(workflow, /NPM_DIST_TAG: \$\{\{ steps\.channel\.outputs\.npm_tag \}\}/);
+  assert.match(workflow, /npm publish --access public --tag "\$\{NPM_DIST_TAG\}"/);
+  assert.doesNotMatch(workflow, /^\s*npm publish --access public\s*$/m);
 });
