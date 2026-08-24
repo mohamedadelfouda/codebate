@@ -56,7 +56,7 @@ async function cleanupSession(id) {
 
 // The out-of-tree bucket for this project's executor should hold no leftover task clones after a stop.
 function executorAgentRoot(dir, agent) {
-  return join(executionWorkspacesRoot(), projectWorkspaceKey(realpathSync(dir)), agent);
+  return join(executionWorkspacesRoot(), projectWorkspaceKey(realpathSync.native(dir)), agent);
 }
 function executorWorkspaceCount(dir, agent) {
   const root = executorAgentRoot(dir, agent);
