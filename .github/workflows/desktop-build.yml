@@ -1,0 +1,233 @@
+name: Desktop release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: windows
+          - os: macos-latest
+            artifact: macos
+          - os: ubuntu-latest
+            artifact: linux
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag, package version, and changelog
+        shell: bash
+        run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
+
+      - name: Run release gate
+        run: pnpm run ci
+
+      - name: Install Linux packaging tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Configure Windows signing when secrets are present
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ($env:CERTIFICATE_BASE64 -and $env:CERTIFICATE_PASSWORD) {
+            $certificatePath = Join-Path $env:RUNNER_TEMP "codebate-signing.pfx"
+            [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
+            "WINDOWS_CERTIFICATE_FILE=$certificatePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "WINDOWS_CERTIFICATE_PASSWORD=$($env:CERTIFICATE_PASSWORD)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            Write-Host "Windows signing enabled for this build."
+          } else {
+            Write-Host "Windows signing secrets are incomplete; building an unsigned artifact."
+          }
+
+      - name: Configure macOS signing and notarization when secrets are present
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MAC_CERTIFICATE_BASE64: ${{ secrets.MAC_CERTIFICATE_BASE64 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${MAC_CERTIFICATE_BASE64}" && -n "${MAC_CERTIFICATE_PASSWORD}" && -n "${APPLE_TEAM_ID_SECRET}" ]]; then
+            CERT_PATH="${RUNNER_TEMP}/codebate-signing.p12"
+            KEYCHAIN_PATH="${RUNNER_TEMP}/codebate-build.keychain-db"
+            printf '%s' "${MAC_CERTIFICATE_BASE64}" | base64 --decode > "${CERT_PATH}"
+            security create-keychain -p '' "${KEYCHAIN_PATH}"
+            security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+            security unlock-keychain -p '' "${KEYCHAIN_PATH}"
+            security import "${CERT_PATH}" -P "${MAC_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
+            security list-keychains -d user -s "${KEYCHAIN_PATH}" login.keychain-db
+            security default-keychain -s "${KEYCHAIN_PATH}"
+            security set-key-partition-list -S apple-tool:,apple: -s -k '' "${KEYCHAIN_PATH}"
+            echo "APPLE_TEAM_ID=${APPLE_TEAM_ID_SECRET}" >> "${GITHUB_ENV}"
+            echo "CODEBATE_BUILD_KEYCHAIN=${KEYCHAIN_PATH}" >> "${GITHUB_ENV}"
+            if [[ -n "${APPLE_ID_SECRET}" && -n "${APPLE_APP_SPECIFIC_PASSWORD_SECRET}" ]]; then
+              echo "APPLE_ID=${APPLE_ID_SECRET}" >> "${GITHUB_ENV}"
+              echo "APPLE_APP_SPECIFIC_PASSWORD=${APPLE_APP_SPECIFIC_PASSWORD_SECRET}" >> "${GITHUB_ENV}"
+              echo "macOS signing and notarization enabled for this build."
+            else
+              echo "macOS signing enabled; notarization secrets are incomplete."
+            fi
+          else
+            echo "macOS signing secrets are incomplete; building an unsigned artifact."
+          fi
+
+      - name: Build installers
+        run: pnpm make
+
+      - name: Remove temporary macOS keychain
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [[ -n "${CODEBATE_BUILD_KEYCHAIN:-}" && -f "${CODEBATE_BUILD_KEYCHAIN}" ]]; then
+            security delete-keychain "${CODEBATE_BUILD_KEYCHAIN}" || true
+          fi
+
+      - name: Upload native artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: codebate-${{ matrix.artifact }}-${{ github.ref_name }}
+          path: out/make/**
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js and npm auth
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Verify tag, package version, and changelog again
+        run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
+
+      - name: Download native artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: codebate-*-${{ github.ref_name }}
+          path: release-artifacts
+
+      - name: Flatten release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-files
+          while IFS= read -r -d '' file; do
+            name="$(basename "$file")"
+            if [[ -e "release-files/${name}" ]]; then
+              echo "Duplicate release filename: ${name}" >&2
+              exit 1
+            fi
+            cp "$file" "release-files/${name}"
+          done < <(find release-artifacts -type f -print0)
+          test -n "$(find release-files -type f -maxdepth 1 -print -quit)"
+
+      - name: Decide stable vs pre-release
+        id: channel
+        shell: bash
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          MAC_CERTIFICATE_BASE64: ${{ secrets.MAC_CERTIFICATE_BASE64 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          prerelease=false
+          reason="signed stable tag"
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            prerelease=true
+            reason="tag has a prerelease suffix"
+          elif [[ -z "${WINDOWS_CERTIFICATE_BASE64}" || -z "${WINDOWS_CERTIFICATE_PASSWORD}" || -z "${MAC_CERTIFICATE_BASE64}" || -z "${MAC_CERTIFICATE_PASSWORD}" || -z "${APPLE_ID_SECRET}" || -z "${APPLE_APP_SPECIFIC_PASSWORD_SECRET}" || -z "${APPLE_TEAM_ID_SECRET}" ]]; then
+            prerelease=true
+            reason="one or more native signing/notarization secrets are missing"
+          fi
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+          echo "Release channel: ${reason}"
+
+      - name: Create or refresh GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.channel.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          prerelease_flag=()
+          if [[ "${PRERELEASE}" == "true" ]]; then prerelease_flag+=(--prerelease); fi
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release-files/* --clobber
+            gh release edit "${GITHUB_REF_NAME}" --title "Codebate ${GITHUB_REF_NAME}" --prerelease="${PRERELEASE}"
+          else
+            gh release create "${GITHUB_REF_NAME}" release-files/* \
+              --title "Codebate ${GITHUB_REF_NAME}" \
+              --generate-notes \
+              "${prerelease_flag[@]}"
+          fi
+
+      - name: Publish npm package when NPM_TOKEN is configured
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NODE_AUTH_TOKEN}" ]]; then
+            echo "NPM_TOKEN is not configured; skipping npm publish."
+            exit 0
+          fi
+          version="$(node -p "require('./package.json').version")"
+          if npm view "codebate@${version}" version >/dev/null 2>&1; then
+            echo "codebate@${version} is already published; skipping."
+            exit 0
+          fi
+          npm publish --access public
