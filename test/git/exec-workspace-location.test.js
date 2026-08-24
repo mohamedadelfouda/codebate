@@ -21,7 +21,7 @@ function repository() {
   writeFileSync(join(dir, "README.md"), "hello\n");
   git(dir, "add", "-A");
   git(dir, "commit", "-qm", "init");
-  return realpathSync(dir);
+  return realpathSync.native(dir);
 }
 
 function isInside(root, candidate) {
@@ -30,7 +30,7 @@ function isInside(root, candidate) {
 }
 
 function canonicalTemp(prefix) {
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
 }
 
 test("the disposable clone is created OUT of the project tree, in the app exec-workspaces bucket", async () => {
