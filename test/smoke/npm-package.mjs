@@ -3,13 +3,27 @@
 // source preflight). `npm pack --dry-run --json` applies npm's real packing rules without creating a tgz.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const packArgs = ["pack", "--dry-run", "--json"];
 
-const raw = execFileSync(npm, ["pack", "--dry-run", "--json"], {
+// Windows exposes npm primarily through npm.cmd. Node 22's execFileSync does not execute .cmd shims
+// directly without a shell (`spawnSync npm.cmd EINVAL`). Keep this smoke shell-free and still exercise
+// npm's real packer by invoking the npm CLI JavaScript with the current Node runtime. Standard Node
+// distributions (including setup-node and normal Windows installs) ship npm beside node.exe.
+let command = "npm";
+let args = packArgs;
+if (process.platform === "win32") {
+  const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+  assert.equal(existsSync(npmCli), true, `npm CLI must exist beside Node on Windows: ${npmCli}`);
+  command = process.execPath;
+  args = [npmCli, ...packArgs];
+}
+
+const raw = execFileSync(command, args, {
   cwd: root,
   encoding: "utf8",
   env: { ...process.env, npm_config_update_notifier: "false", npm_config_fund: "false", npm_config_audit: "false" },
