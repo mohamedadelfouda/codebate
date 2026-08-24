@@ -191,16 +191,19 @@ jobs:
         run: |
           set -euo pipefail
           prerelease=false
+          npm_tag=latest
           reason="signed stable tag"
           if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
             prerelease=true
+            npm_tag=next
             reason="tag has a prerelease suffix"
           elif [[ -z "${WINDOWS_CERTIFICATE_BASE64}" || -z "${WINDOWS_CERTIFICATE_PASSWORD}" || -z "${MAC_CERTIFICATE_BASE64}" || -z "${MAC_CERTIFICATE_PASSWORD}" || -z "${APPLE_ID_SECRET}" || -z "${APPLE_APP_SPECIFIC_PASSWORD_SECRET}" || -z "${APPLE_TEAM_ID_SECRET}" ]]; then
             prerelease=true
             reason="one or more native signing/notarization secrets are missing"
           fi
           echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
-          echo "Release channel: ${reason}"
+          echo "npm_tag=${npm_tag}" >> "${GITHUB_OUTPUT}"
+          echo "Release channel: ${reason}; npm dist-tag: ${npm_tag}"
 
       - name: Create or refresh GitHub Release
         shell: bash
@@ -225,6 +228,7 @@ jobs:
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_DIST_TAG: ${{ steps.channel.outputs.npm_tag }}
         run: |
           set -euo pipefail
           if [[ -z "${NODE_AUTH_TOKEN}" ]]; then
@@ -236,4 +240,5 @@ jobs:
             echo "codebate@${version} is already published; skipping."
             exit 0
           fi
-          npm publish --access public
+          echo "Publishing codebate@${version} with npm dist-tag ${NPM_DIST_TAG}."
+          npm publish --access public --tag "${NPM_DIST_TAG}"
