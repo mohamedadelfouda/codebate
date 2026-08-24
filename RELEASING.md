@@ -66,6 +66,17 @@ workflow publishes `codebate@<package.json version>` after the native builds suc
 version already exists, a workflow re-run skips publishing instead of failing. Without `NPM_TOKEN`, the
 GitHub/desktop release still completes and npm publishing is skipped explicitly.
 
+The npm dist-tag follows the **semantic version**, not the desktop-signing state:
+
+- Stable versions such as `0.3.0` publish under npm's `latest` tag.
+- Semantic prereleases such as `0.3.0-rc.1` publish under npm's `next` tag, never `latest`.
+- A stable semantic version whose desktop installers are forced to GitHub pre-release only because signing
+  secrets are missing still publishes under npm `latest`; npm/CLI stability is independent of native
+  installer signing.
+
+This distinction is important because the in-app updater reads npm's `/codebate/latest` endpoint and the
+UI recommends `codebate@latest`. A release candidate must therefore never advance the `latest` dist-tag.
+
 ## Source-run users
 
 Source users update with `git pull`. `pnpm start` runs `scripts/source-preflight.mjs` before the server, so
@@ -99,6 +110,8 @@ published tag:
 - **Tag ⇄ version ⇄ CHANGELOG** — `scripts/check-release-version.mjs` fails the tag workflow unless the tag,
   `package.json` version, and a matching CHANGELOG section all agree.
 - **Unsigned ⇒ pre-release** — missing signing/notarization secrets can never silently produce a stable
-  release.
+  GitHub release.
+- **npm prerelease isolation** — semantic prereleases publish under `next`, never `latest`, so the in-app
+  stable update check cannot advertise an RC as stable.
 - **npm is opt-in and idempotent** — it publishes only when `NPM_TOKEN` exists and skips an already-published
   version on workflow re-runs.
