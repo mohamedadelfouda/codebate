@@ -9,10 +9,16 @@
 // fresh throwaway dir — never reuse an inherited CODEBATE_RUNTIME_DIR: these tests create real disposable
 // clones + session files through the app's own paths, so a stray/real value would be polluted, and parallel
 // test processes would collide on one shared runtime.
-import { mkdtempSync, rmSync } from "node:fs";
+//
+// Canonicalize the fresh directory before store.js sees it. macOS commonly exposes os.tmpdir() through
+// `/var` while realpath resolves to `/private/var`; Windows runners can likewise expose a temp directory
+// through a filesystem alias. The production execution-root guard intentionally rejects a runtime path
+// whose canonical location differs, so the test harness must hand it the canonical throwaway root rather
+// than weakening that security check just to accommodate CI aliases.
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const runtime = mkdtempSync(join(tmpdir(), "ar-git-test-runtime-"));
+const runtime = realpathSync(mkdtempSync(join(tmpdir(), "ar-git-test-runtime-")));
 process.env.CODEBATE_RUNTIME_DIR = runtime;
 process.on("exit", () => { try { rmSync(runtime, { recursive: true, force: true }); } catch {} });
