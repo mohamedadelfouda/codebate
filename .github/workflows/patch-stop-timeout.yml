@@ -1,0 +1,39 @@
+name: Apply stop-timeout fix
+
+on:
+  push:
+    branches: [fix/stabilization-ci-release]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/stabilization-ci-release
+      - name: Apply exact liveness fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('server/orchestrator.js')
+          text = path.read_text()
+          needle = '    timeoutHandle.unref?.();\n'
+          if text.count(needle) != 1:
+              raise SystemExit(f'expected exactly one unref timeout, found {text.count(needle)}')
+          text = text.replace(needle, '', 1)
+          path.write_text(text)
+          PY
+          git diff --check
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/orchestrator.js
+          git commit -m "fix(orchestration): keep stop-settle timeout live"
+          git push origin HEAD:fix/stabilization-ci-release
