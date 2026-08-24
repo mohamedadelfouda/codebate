@@ -52,6 +52,12 @@ jobs:
       - name: Run release gate
         run: pnpm run ci
 
+      - name: Run coverage and browser regressions on Linux
+        if: runner.os == 'Linux'
+        run: |
+          pnpm run test:coverage
+          pnpm run test:browser
+
       - name: Install Linux packaging tools
         if: runner.os == 'Linux'
         run: |
@@ -89,7 +95,7 @@ jobs:
           if [[ -n "${MAC_CERTIFICATE_BASE64}" && -n "${MAC_CERTIFICATE_PASSWORD}" && -n "${APPLE_TEAM_ID_SECRET}" ]]; then
             CERT_PATH="${RUNNER_TEMP}/codebate-signing.p12"
             KEYCHAIN_PATH="${RUNNER_TEMP}/codebate-build.keychain-db"
-            printf '%s' "${MAC_CERTIFICATE_BASE64}" | base64 --decode > "${CERT_PATH}"
+            printf '%s' "${MAC_CERTIFICATE_BASE64}" | base64 -D > "${CERT_PATH}"
             security create-keychain -p '' "${KEYCHAIN_PATH}"
             security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
             security unlock-keychain -p '' "${KEYCHAIN_PATH}"
@@ -169,7 +175,7 @@ jobs:
             fi
             cp "$file" "release-files/${name}"
           done < <(find release-artifacts -type f -print0)
-          test -n "$(find release-files -type f -maxdepth 1 -print -quit)"
+          test -n "$(find release-files -maxdepth 1 -type f -print -quit)"
 
       - name: Decide stable vs pre-release
         id: channel
