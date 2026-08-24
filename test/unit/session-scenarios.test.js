@@ -89,6 +89,130 @@ test("scenario · three-way with one unparseable control: seals on the valid maj
   assert.equal(r.sealedOnQuorum, true);
 });
 
+// ── ERP session 2fe94389 (2026-08-24, debate: Claude vs Codex) — real controls, replayed ──
+// The pricing question ("50k setup + 7.5k/month?") converged in round 3 of 5. Round 2 filed a
+// disagreement; round 3 BOTH agents proposed resolve(item-001) — locking in that closing an item
+// requires every participant's explicit action, and that the session then seals early instead of
+// burning the remaining rounds.
+test("scenario · ERP pricing debate: joint resolve of the filed disagreement seals in round 3", () => {
+  const disagreement = create(
+    "disagreement",
+    "هل 7,500 جنيهًا شهريًّا هي السعر المعلن أم خصم «عميل مؤسّس» مكتوب مقابل سعر معلن 12,000؟",
+    "agent", "resume_agent_round",
+  );
+  // Round 2: Codex converged, Claude open with the disagreement filed. Real controls from the session.
+  const r2 = assess([
+    control({ itemProposals: [] }),
+    control({ convergence: "open", goalStatus: "incomplete", substantiveDelta: true, itemProposals: [disagreement] }),
+  ]);
+  assert.equal(r2.agreementState, "open");
+  assert.equal(r2.canStop, false);
+  // Precedence in discussionState(): an open agreement reports open_disagreement before
+  // agent_work_pending — matches the real session's roundDiagnostics for rounds 2–3.
+  assert.equal(r2.continueReason, "open_disagreement");
+
+  // Round 3 replays WITH round 2's approved registry (the harness's sequential-replay capability).
+  const registryAfterR2 = r2.itemRegistry;
+  assert.equal(registryAfterR2.length, 1);
+  assert.equal(registryAfterR2[0].status, "open");
+  const r3 = assess([
+    control({ itemProposals: [{ action: "resolve", itemId: "item-001" }] }),
+    control({ itemProposals: [{ action: "resolve", itemId: "item-001" }] }),
+  ], { registry: registryAfterR2 });
+  assert.equal(r3.agreementState, "converged");
+  assert.equal(r3.canStop, true);
+  assert.equal(r3.stopReason, "complete");
+  const resolvedItem = r3.itemRegistry.find((i) => i.itemId === "item-001");
+  assert.equal(resolvedItem?.status, "resolved");
+});
+
+test("scenario · unilateral resolve: one agent cannot close the other's open item", () => {
+  const disagreement = create("disagreement", "الطرفان لم يتوافقا بعد على ترتيب بنود التنفيذ.", "agent", "resume_agent_round");
+  const seeded = assess([control(), control({ convergence: "open", goalStatus: "incomplete", substantiveDelta: true, itemProposals: [disagreement] })]);
+  assert.equal(seeded.itemRegistry.length, 1);
+
+  // Codex proposes resolve, Claude stays silent on the item (no proposal for it at all).
+  const r = assess([
+    control({ itemProposals: [{ action: "resolve", itemId: "item-001" }] }),
+    control(),
+  ], { registry: seeded.itemRegistry });
+  assert.equal(r.canStop, false);
+  // Claude's terminal claim omits an open item → rejected before registry application.
+  assert.ok(r.consistencyErrors.some((e) => e.code === "unaddressed_open_item"));
+  const stillOpen = r.itemRegistry.find((i) => i.itemId === "item-001");
+  assert.equal(stillOpen?.status, "open"); // NOT closed by omission or by one voice
+});
+
+// ── ERP session 2fe94389, question 3 rounds 4–5: the REAL failure this harness exists to pin ──
+// Both agents' stored controls were individually valid and both declared convergence:"converged"
+// + goalStatus:"satisfied" with zero delta — but their LEDGERS disagreed on items 002/003/004:
+//   codex R4: keep_open ×3 + resolve(item-005)
+//   claude R4: keep_open(item-002) + merge_into(item-003→004) + keep_open(item-004) + resolve(item-005)
+// The merge split consensus → exactly ONE conflicting_item_actions (item-003, the contested item)
+// → consistency_error. Rounds 5 repeated the same ledger split (claude dropped the merge, codex
+// switched to resolve-all) so nothing changed between them: two identical invalid rounds burned
+// to the round limit.
+//
+// NOTE: keep_open under a satisfied claim is itself rejected per-item (terminal_item_kept_open) —
+// these controls are built as the engine saw them AFTER schema validation, with the ledger split
+// carried by the actions themselves.
+const LEDGER_CONFLICT_REGISTRY = [
+  { itemId: "item-002", kind: "remaining_work", status: "open", text: "جدولة تصدير النسخ الاحتياطية لكل شركة دوريًّا", requiredStep: { actor: "agent", action: "resume_agent_round" } },
+  { itemId: "item-003", kind: "remaining_work", status: "open", text: "قياس التسوية الدورية للمخزون قبل الحكم عليها", requiredStep: { actor: "agent", action: "resume_agent_round" } },
+  { itemId: "item-004", kind: "external_validation", status: "open", text: "اعتماد بوابة الإصدار عبر مشغل بشري", requiredStep: { actor: "human_operator", action: "run_external_check" } },
+  { itemId: "item-005", kind: "disagreement", status: "open", text: "حسم مسؤولية النسخ الاحتياطي بين المشروع ومزود الاستضافة", requiredStep: { actor: "agent", action: "resume_agent_round" } },
+];
+// Controls are built as RAW JSON and passed through the real parseAgentControl, exactly like the
+// orchestrator does — the engine's `valid`/`targetVersion` fields come from validation, not from us.
+const ledgerControl = (overrides) => parseAgentControl(`<agent-control>${JSON.stringify({ controlVersion: 2, targetVersion: 3, ...overrides })}</agent-control>`);
+test("scenario · ERP Q3 rounds 4–5: readable converged controls with conflicting ledgers burn to the limit (documents current behaviour)", () => {
+  const codexR4 = ledgerControl({ convergence: "converged", goalStatus: "satisfied", substantiveDelta: false, itemProposals: [
+    { action: "keep_open", itemId: "item-002" }, { action: "keep_open", itemId: "item-003" },
+    { action: "keep_open", itemId: "item-004" }, { action: "resolve", itemId: "item-005" },
+  ] });
+  const claudeR4 = ledgerControl({ convergence: "converged", goalStatus: "satisfied", substantiveDelta: false, itemProposals: [
+    { action: "keep_open", itemId: "item-002" }, { action: "merge_into", itemId: "item-003", targetItemId: "item-004" },
+    { action: "keep_open", itemId: "item-004" }, { action: "resolve", itemId: "item-005" },
+  ] });
+  assert.equal(codexR4.valid, true);
+  assert.equal(claudeR4.valid, true); // individually valid — the conflict is BETWEEN them
+  // The real session ran targetVersion 3 by rounds 4–5 (stored controls carry tv:3); the default
+  // here is 2, which would fail version alignment BEFORE the ledger conflict is even reached.
+  const r4 = assess([codexR4, claudeR4], { registry: LEDGER_CONFLICT_REGISTRY, targetVersion: 3 });
+  assert.equal(r4.allValid, false);
+  assert.equal(r4.continueReason, "consistency_error");
+  assert.ok(r4.conflicts.some((c) => c.code === "conflicting_item_actions" && c.itemId === "item-003")); // the merge split
+  // THE GAP: every readable control is valid AND converged AND delta-free, yet the degraded path is
+  // gated on hasUnreadableControl in discussionState() — so a ledger conflict among READABLE,
+  // agreeing-in-prose participants can never degrade. This is why the real session burned rounds 4–5.
+  assert.equal(r4.degradable, false);
+});
+
+// RED spec — the fix contract, written first so the engine change lands against it.
+// Same persisted condition as the real session: valid readable controls, everyone declaring
+// convergence, no substantive change, and the ONLY obstacle is a stable ledger conflict.
+// After DEGRADED_STOP_ROUNDS consecutive unchanged rounds the session must stop honestly
+// instead of burning to the round limit. Skipped until discussionState() grows a degraded path
+// for readable-control conflicts; unskip as part of that change.
+test("scenario · RED spec: a stable ledger conflict among converged readable agents degrades after the bound", { skip: "engine lacks a degraded stop for READABLE controls whose item ledgers conflict — unskip in that change" }, () => {
+  const codexStable = ledgerControl({ convergence: "converged", goalStatus: "satisfied", substantiveDelta: false, itemProposals: [
+    { action: "keep_open", itemId: "item-002" }, { action: "keep_open", itemId: "item-003" },
+    { action: "keep_open", itemId: "item-004" }, { action: "resolve", itemId: "item-005" },
+  ] });
+  const claudeStable = ledgerControl({ convergence: "converged", goalStatus: "satisfied", substantiveDelta: false, itemProposals: [
+    { action: "keep_open", itemId: "item-002" }, { action: "merge_into", itemId: "item-003", targetItemId: "item-004" },
+    { action: "keep_open", itemId: "item-004" }, { action: "resolve", itemId: "item-005" },
+  ] });
+  assert.equal(codexStable.valid, true);
+  assert.equal(claudeStable.valid, true); // valid individually — only the LEDGERS disagree
+  const waiting = assess([codexStable, claudeStable], { registry: LEDGER_CONFLICT_REGISTRY, targetVersion: 3 });
+  assert.equal(waiting.canStop, false);
+  assert.equal(waiting.degradable, true);        // eligible once the engine learns this shape…
+  const exhausted = assess([codexStable, claudeStable], { registry: LEDGER_CONFLICT_REGISTRY, targetVersion: 3, invalidControlExhausted: true });
+  assert.equal(exhausted.degradedStop, true);     // …and stops honestly when the bound is hit
+  assert.equal(exhausted.stopReason, "degraded_ledger_conflict");
+});
+
 // Scenario — the ACTUAL repo-review failure. Codex hit its usage limit and dropped after round 1, so
 // later rounds ran with only two providers; Cursor's control was unparseable (missing_control). That
 // leaves just ONE valid control — which correctly cannot seal (quorum never seals on a single voice) —
