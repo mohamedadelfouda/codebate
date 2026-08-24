@@ -37,8 +37,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Syntax, lint, unit, integration, and smoke
-        run: pnpm run ci
+      - name: Syntax
+        run: pnpm run check
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Unit + Git regressions
+        timeout-minutes: 5
+        run: pnpm test
+
+      - name: Integration
+        timeout-minutes: 5
+        run: pnpm run test:integration
+
+      - name: Source + CLI smoke
+        timeout-minutes: 5
+        run: pnpm run test:smoke
 
   extended:
     name: Workflow lint + coverage + browser regressions
@@ -72,9 +87,11 @@ jobs:
           /tmp/actionlint -color
 
       - name: Coverage thresholds
+        timeout-minutes: 5
         run: pnpm run test:coverage
 
       - name: Browser regressions
+        timeout-minutes: 5
         run: pnpm run test:browser
 
       - name: Upload browser diagnostics on failure
