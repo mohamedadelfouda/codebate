@@ -19,9 +19,12 @@ const psExe = join(process.env.SystemRoot || "C:\\Windows", "System32", "Windows
 
 function probeChild({ secret, wrote }) {
   // Single-quoted PS literals: Windows backslash paths are safe (temp/profile paths carry no quotes).
+  // Bound the network probe itself: a denied AppContainer connect can be black-holed rather than
+  // rejected synchronously on hosted Windows runners, which otherwise makes the whole integration
+  // test hit runProcess's outer timeout before it can report the confinement result.
   const src = [
     `try { Get-Content -Raw -ErrorAction Stop '${secret}' | Out-Null; Write-Output 'read=LEAK' } catch { Write-Output 'read=BLOCKED' }`,
-    `try { (New-Object Net.Sockets.TcpClient).Connect('1.1.1.1',443); Write-Output 'net=OPEN' } catch { Write-Output 'net=BLOCKED' }`,
+    `$client = New-Object Net.Sockets.TcpClient; try { $pending = $client.BeginConnect('1.1.1.1',443,$null,$null); if (-not $pending.AsyncWaitHandle.WaitOne(3000)) { throw 'connect timeout' }; $client.EndConnect($pending); Write-Output 'net=OPEN' } catch { Write-Output 'net=BLOCKED' } finally { $client.Close() }`,
     `try { Set-Content -Path '${wrote}' -Value ok -ErrorAction Stop; Write-Output 'write=OK' } catch { Write-Output 'write=FAIL' }`,
   ].join("\n");
   return Buffer.from(src, "utf16le").toString("base64");
