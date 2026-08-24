@@ -9,7 +9,7 @@
   "bin": { "codebate": "bin/codebate.mjs" },
   "files": ["bin", "server", "public", "desktop", "CHANGELOG.md", "README.ar.md"],
   "scripts": {
-    "start": "node server/index.js",
+    "start": "node scripts/source-preflight.mjs && node server/index.js",
     "dev": "node --watch server/index.js",
     "desktop": "electron-forge start",
     "package": "electron-forge package",
@@ -21,7 +21,8 @@
     "test:browser": "node test/browser/responsive-shell.mjs && node test/browser/sse-resync.mjs && node test/browser/setup-doctor.mjs",
     "test:smoke": "node test/smoke/source-server.mjs && node test/smoke/cli-launcher.mjs",
     "test:integration": "node --test \"test/integration/*.test.js\"",
-    "ci": "node scripts/check-syntax.mjs && node --experimental-test-module-mocks --test \"test/unit/*.test.js\" \"test/git/*.test.js\""
+    "ci": "pnpm run check && pnpm run lint && pnpm test && pnpm run test:integration && pnpm run test:smoke",
+    "ci:full": "pnpm run ci && pnpm run test:coverage && pnpm run test:browser"
   },
   "engines": {
     "node": ">=22"
