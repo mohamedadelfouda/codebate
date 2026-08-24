@@ -43,9 +43,13 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
-      - name: Unit + Git regressions
+      - name: Unit regressions
         timeout-minutes: 5
-        run: pnpm test
+        run: pnpm run test:unit
+
+      - name: Git regressions
+        timeout-minutes: 10
+        run: pnpm run test:git
 
       - name: Integration
         timeout-minutes: 5
