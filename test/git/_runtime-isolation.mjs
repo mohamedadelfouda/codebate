@@ -11,14 +11,15 @@
 // test processes would collide on one shared runtime.
 //
 // Canonicalize the fresh directory before store.js sees it. macOS commonly exposes os.tmpdir() through
-// `/var` while realpath resolves to `/private/var`; Windows runners can likewise expose a temp directory
-// through a filesystem alias. The production execution-root guard intentionally rejects a runtime path
-// whose canonical location differs, so the test harness must hand it the canonical throwaway root rather
-// than weakening that security check just to accommodate CI aliases.
+// `/var` while realpath resolves to `/private/var`; Windows hosted runners commonly expose the temp home
+// through an 8.3 alias such as `RUNNER~1`. Use Node's native realpath implementation so those DOS aliases
+// are expanded to the same final path representation used by the product's async filesystem operations.
+// The production execution-root guard intentionally rejects redirected ancestors, so the test harness must
+// canonicalize its own throwaway root rather than weakening that security check just to accommodate CI.
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const runtime = realpathSync(mkdtempSync(join(tmpdir(), "ar-git-test-runtime-")));
+const runtime = realpathSync.native(mkdtempSync(join(tmpdir(), "ar-git-test-runtime-")));
 process.env.CODEBATE_RUNTIME_DIR = runtime;
 process.on("exit", () => { try { rmSync(runtime, { recursive: true, force: true }); } catch {} });
