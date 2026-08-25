@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.2.4 — 2026-08-25
+
+- Persistent readable ledger/action conflicts now stop honestly after a bounded persistence window instead of burning every configured round. These outcomes remain `unresolved`, never `converged`, and cannot surface the Execute action until the conflict is actually resolved.
+- Ledger-conflict persistence now tracks the real contested choices — agent, item, action, and `targetItemId` — resets when the split changes, computes its signature after control repair, and ignores harmless omission-vs-`keep_open` differences that do not represent a real registry conflict.
+- Browser and server outcome reporting now distinguish readable ledger conflicts from unreadable-control degradation, including dedicated Arabic/English wording and discovery of terminal `unresolved` outcomes after reload.
+- Added deterministic replay/regression coverage from real sessions for quorum sealing, provider dropout, confirmation-loop breaking, unreadable controls, readable ledger conflicts, post-repair conflicts, target-aware persistence, bilingual outcome rendering, and the non-executable unresolved Decision state.
 - Restored enforced GitHub CI: syntax, lint, unit/git, integration, and smoke suites run on Windows/macOS/Linux; coverage thresholds and real browser regressions run on Linux.
 - Restored the tag-triggered native release pipeline for Windows, macOS, and Linux, including tag/version/CHANGELOG validation, optional code signing/notarization, GitHub Release artifacts, and opt-in idempotent npm publishing. Missing signing secrets can only produce a pre-release, never a stable release.
 - Semantic prereleases such as `0.3.0-rc.1` now publish to npm under the `next` dist-tag instead of the default `latest`, so the stable update checker and `codebate@latest` never advertise an RC as stable.
