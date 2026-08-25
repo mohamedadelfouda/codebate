@@ -30,13 +30,9 @@
 
 ## 0.2.2 — 2026-07-20
 
-- Added a guarded **Execute** stage after agreement: Codex can modify only a disposable out-of-tree clone, the diff is secret-scanned, and nothing touches the user's project until explicit accept/reject.
-- Accepted execution can create a commit in the user's project or publish a pull request to GitHub, with drift checks preventing stale review acceptance.
-- Added recovery for crashes during accepted-merge finalization so an interrupted accept can be completed safely on startup.
-- Added trusted project and trusted CLI memory, plus provider readiness checks that fail closed when a binary changes underneath an approval.
-- Added connector proposal/approval flow with audit logging and explicit user consent before any state-changing external action.
-- Added provider setup diagnostics, update checks, bounded logs, session export/recovery, and runtime locking for safer multi-instance use.
-
-## 0.2.1 — 2026-07-15
-
-- Initial public Codebate release.
+- Follow-up messages no longer lose the plan: the shared transcript pins the original task, the current round's full proposals, and the latest agreed outcome, and compacts in chronological order, so a "modify the plan" turn keeps the plan instead of drifting to a different subject. Each provider gets a transcript budget sized to its own context window.
+- A malformed `<agent-control>` block from one provider no longer sinks a real agreement: a converged valid **majority** seals it (the excluded control is named and its actual position reported as unknown), and the closing message names the blocking provider instead of the misleading "no agreement — raise the rounds". (Repairing Codex/Cursor control blocks stays fail-closed: their CLIs expose no tool-free mode.)
+- Over-signalled `substantiveDelta` is bounded — a converged discussion stops after its confirmation rounds instead of looping to the round limit, while a genuine late change still gets a round to reach the other agents.
+- Agents are told to verify only against the actually-attached project and to say so when a claim is about code that isn't there (closing a case where they reported "verified" against a different codebase); the finalizer answers the user's real request, treats attachments as material rather than new instructions, and represents every participant instead of collapsing an N-agent session into two sides.
+- Every prompt carries a hard same-language directive, so a provider replies in the user's language (Arabic ↔ English) instead of defaulting to English.
+- Project trust is remembered by identity fingerprint — a git repo with a real remote and a stable `.git` instance (device+inode) — so re-attaching a project you already trusted skips the consent step; attaching now flows straight into the single trust consent, and a new **Trusted projects** panel in Setup lists and forgets remembered projects.
