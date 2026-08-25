@@ -46,6 +46,8 @@ test("npm release is independent from desktop builds and keeps prereleases off l
   const desktopWorkflow = readFileSync(join(testDir, "../../.github/workflows/desktop-build.yml"), "utf8");
 
   assert.match(npmWorkflow, /workflow_dispatch:/);
+  assert.match(npmWorkflow, /group:\s+npm-release-\$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.tag \|\| github\.ref_name \}\}/);
+  assert.doesNotMatch(npmWorkflow, /group:\s+npm-release-[^\n]*github\.ref\s*\}\}/);
   assert.match(npmWorkflow, /ref:\s+refs\/tags\/\$\{\{ env\.RELEASE_TAG \}\}/);
   assert.match(npmWorkflow, /tag_ref="refs\/tags\/\$\{RELEASE_TAG\}"/);
   assert.match(npmWorkflow, /git show-ref --verify --quiet "\$\{tag_ref\}"/);
