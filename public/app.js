@@ -1155,7 +1155,7 @@ function renderRouteSuggestion(chat) {
 const OUTCOME_LABEL_KEYS = {
   agreement: { converged: "agreementConverged", open: "agreementOpen", unknown: "agreementUnknown", fallback: "agreementUnknown" },
   completion: { satisfied: "completionSatisfied", needs_user: "completionNeedsUser", blocked: "completionBlocked", incomplete: "completionIncomplete", fallback: "completionIncomplete" },
-  stopReason: { complete: "stopComplete", user_decision: "stopUserDecision", external_block: "stopExternalBlock", round_limit: "stopRoundLimit", invalid_control: "stopInvalidControl", degraded_convergence: "stopDegraded", cancelled: "stopCancelled", error: "stopError", fallback: "stopInvalidControl" },
+  stopReason: { complete: "stopComplete", user_decision: "stopUserDecision", external_block: "stopExternalBlock", round_limit: "stopRoundLimit", invalid_control: "stopInvalidControl", degraded_convergence: "stopDegraded", degraded_ledger_conflict: "stopDegradedLedgerConflict", cancelled: "stopCancelled", error: "stopError", fallback: "stopInvalidControl" },
   kind: { disagreement: "pendingDisagreement", user_decision: "pendingUserDecision", external_validation: "pendingExternalValidation", remaining_work: "pendingRemainingWork", out_of_scope: "pendingOutOfScope", fallback: "pendingUnclassified" },
   actor: { user: "actorUser", human_operator: "actorHumanOperator", orchestrator: "actorOrchestrator", agent: "actorAgent", fallback: "system" },
   action: { provide_decision: "actionProvideDecision", run_external_check: "actionRunExternalCheck", resume_agent_round: "actionResumeAgentRound", fallback: "unresolved" },
@@ -2389,7 +2389,7 @@ function formatClock(iso) {
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString(localeId(lang), { hour: "2-digit", minute: "2-digit" });
 }
 function finalReportFrom(messages) {
-  return [...messages].reverse().find((message) => ["converged", "needs_user", "blocked_external", "needs_more_rounds"].includes(message.phase));
+  return [...messages].reverse().find((message) => ["converged", "needs_user", "blocked_external", "needs_more_rounds", "unresolved"].includes(message.phase));
 }
 function latestRunFinalReport() {
   return finalReportFrom(latestRunMessages());

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { assessRound, parseAgentControl } from "../../server/convergence.js";
+import { assessRound as assessDiscussionRound } from "../../server/discussion-assessment.js";
 
 // ── Session replay harness ──────────────────────────────────────────────────────
 // Behavioural convergence fixes (does a real session stop / seal when it should?) are
@@ -212,16 +213,16 @@ test("scenario · ERP Q3: an isolated readable ledger conflict remains open (doc
 // unanimous ledger choice stops cleanly on it (proved above). The only obstacle to agreement here is
 // therefore the unchanged item-003 action split. After the persistence bound it should degrade honestly.
 // Skipped until discussionState() grows a degraded path for stable readable-control ledger conflicts.
-test("scenario · RED spec: a stable isolated ledger conflict among converged readable agents degrades after the bound", { skip: "engine lacks a degraded stop for a stable READABLE ledger-only conflict — unskip in that change" }, () => {
+test("scenario · a stable isolated ledger conflict among converged readable agents degrades after the bound", () => {
   const controls = isolatedLedgerControls();
-  const waiting = assess(controls, { registry: LEDGER_CONFLICT_REGISTRY, targetVersion: 3 });
+  const waiting = assessDiscussionRound(controls, 3, LEDGER_CONFLICT_REGISTRY);
   assert.equal(waiting.allValid, true);
   assert.equal(waiting.consistencyErrors.length, 0);
   assert.deepEqual(waiting.conflicts, [{ code: "conflicting_item_actions", itemId: "item-003" }]);
   assert.equal(waiting.canStop, false);
   assert.equal(waiting.degradable, true);        // eligible once the engine learns this shape…
 
-  const exhausted = assess(controls, { registry: LEDGER_CONFLICT_REGISTRY, targetVersion: 3, invalidControlExhausted: true });
+  const exhausted = assessDiscussionRound(controls, 3, LEDGER_CONFLICT_REGISTRY, false, true);
   assert.equal(exhausted.degradedStop, true);     // …and stops honestly when the bound is hit
   assert.equal(exhausted.stopReason, "degraded_ledger_conflict");
 });

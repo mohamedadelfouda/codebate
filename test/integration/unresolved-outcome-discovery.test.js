@@ -16,9 +16,7 @@ import { STRINGS as catalog } from "../../public/strings.js";
 //
 // Keep skipped until degraded_ledger_conflict is implemented end-to-end. When unskipped, the browser must
 // discover phase:"unresolved", render its dedicated localized stop label, and still withhold Execute.
-test("scenario · RED browser: terminal unresolved outcome is discovered and rendered but never executable", {
-  skip: "finalReportFrom does not yet include unresolved terminal outcomes; unskip with degraded_ledger_conflict public wiring",
-}, async () => {
+test("scenario · browser: terminal unresolved outcome is discovered and rendered but never executable", async () => {
   const harness = await launchBrowserHarness();
   const { devtools } = harness;
 
