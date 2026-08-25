@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  group: npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
