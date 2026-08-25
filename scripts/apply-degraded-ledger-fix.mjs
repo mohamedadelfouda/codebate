@@ -14,13 +14,6 @@ function replaceOnce(source, before, after, label) {
   return source.slice(0, first) + after + source.slice(first + before.length);
 }
 
-function replaceAllExact(source, before, after, expected, label) {
-  const parts = source.split(before);
-  const count = parts.length - 1;
-  if (count !== expected) throw new Error(`${label}: expected ${expected} matches, found ${count}`);
-  return parts.join(after);
-}
-
 edit("server/orchestrator.js", (input) => {
   let s = input;
   s = replaceOnce(
@@ -124,26 +117,26 @@ edit("test/unit/session-scenarios.test.js", (input) => {
     'import { assessRound, parseAgentControl } from "../../server/discussion-assessment.js";',
     "session scenario assessment import",
   );
-  s = s.replace(
+  s = replaceOnce(
+    s,
     'test("scenario · RED spec: a stable isolated ledger conflict among converged readable agents degrades after the bound", { skip: "engine lacks a degraded stop for a stable READABLE ledger-only conflict — unskip in that change" }, () => {',
     'test("scenario · a stable isolated ledger conflict among converged readable agents degrades after the bound", () => {',
+    "session scenario RED activation",
   );
-  if (s === input) throw new Error("session scenario RED test was not activated");
   return s;
 });
 
 edit("test/unit/orchestrator-degraded-ledger-outcome.test.js", (input) => {
-  let s = input;
-  s = replaceAllExact(s,
-    '{\n  skip: "degraded_ledger_conflict is not implemented yet — unskip with the engine/orchestrator change",\n}, () => {',
-    '() => {',
-    1,
+  let s = replaceOnce(
+    input,
+    'test("scenario · RED outcome: degraded ledger conflict stays unresolved, keeps its reason, and never blames unreadable controls", {\n  skip: "public outcome/renderers do not yet model degraded_ledger_conflict as a non-adoptable terminal stop",\n}, () => {',
+    'test("scenario · outcome: degraded ledger conflict stays unresolved, keeps its reason, and never blames unreadable controls", () => {',
     "outcome RED activation",
   );
-  s = replaceAllExact(s,
-    '{\n  skip: "browser status label for degraded_ledger_conflict is not implemented yet",\n}, () => {',
-    '() => {',
-    1,
+  s = replaceOnce(
+    s,
+    'test("scenario · RED browser status: degraded ledger conflict has a dedicated bilingual decision-card label", {\n  skip: "browser stop-reason mapping/catalog do not yet include degraded_ledger_conflict",\n}, () => {',
+    'test("scenario · browser status: degraded ledger conflict has a dedicated bilingual decision-card label", () => {',
     "status-label RED activation",
   );
   return s;
@@ -151,8 +144,8 @@ edit("test/unit/orchestrator-degraded-ledger-outcome.test.js", (input) => {
 
 edit("test/unit/orchestrator-degraded-ledger-persistence.test.js", (input) => replaceOnce(
   input,
-  '  test(`scenario · RED orchestration (${mode}): changed merge target on the same ledger action resets degraded persistence`, {\n    skip: "orchestrator does not yet track a target-aware ledger-conflict signature — unskip with degraded_ledger_conflict",\n  }, async (t) => {',
-  '  test(`scenario · orchestration (${mode}): changed merge target on the same ledger action resets degraded persistence`, async (t) => {',
+  '  test(`scenario · RED orchestration (${mode}): changed merge target on the same item resets degraded persistence`, {\n    skip: "orchestrator does not yet track a target-aware ledger-conflict signature — unskip with degraded_ledger_conflict",\n  }, async (t) => {',
+  '  test(`scenario · orchestration (${mode}): changed merge target on the same item resets degraded persistence`, async (t) => {',
   "persistence RED activation",
 ));
 
