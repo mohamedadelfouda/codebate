@@ -22,9 +22,7 @@ const appSource = fs.readFileSync(new URL("../../public/app.js", import.meta.url
 // then explain the ledger disagreement instead of inventing malformed/unreadable control data.
 //
 // Skipped until the engine change lands. Unskip together with the engine-level RED spec.
-test("scenario · RED outcome: degraded ledger conflict stays unresolved, keeps its reason, and never blames unreadable controls", {
-  skip: "public outcome/renderers do not yet model degraded_ledger_conflict as a non-adoptable terminal stop",
-}, () => {
+test("scenario · outcome: degraded ledger conflict stays unresolved, keeps its reason, and never blames unreadable controls", () => {
   // Shape of the future engine result after the isolated readable conflict persists to its bound.
   // Both controls were parseable/valid; the only unresolved machine disagreement is item-003.
   const assessment = {
@@ -98,9 +96,7 @@ test("scenario · RED outcome: degraded ledger conflict stays unresolved, keeps 
 // The decision card has a separate status-label path in public/app.js. A distinct stop reason must not
 // fall through to stopInvalidControl even if the narrative renderer is correct. Keep this as a RED public
 // contract so the eventual implementation adds a dedicated bilingual label and wires the decision card to it.
-test("scenario · RED browser status: degraded ledger conflict has a dedicated bilingual decision-card label", {
-  skip: "browser stop-reason mapping/catalog do not yet include degraded_ledger_conflict",
-}, () => {
+test("scenario · browser status: degraded ledger conflict has a dedicated bilingual decision-card label", () => {
   assert.match(appSource, /degraded_ledger_conflict\s*:\s*["']stopDegradedLedgerConflict["']/);
   assert.match(appSource, /outcomeLabel\(["']stopReason["'],\s*outcome\.stopReason\)/);
 

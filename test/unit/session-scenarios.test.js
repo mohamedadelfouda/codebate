@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assessRound, parseAgentControl } from "../../server/convergence.js";
+import { assessRound, parseAgentControl } from "../../server/discussion-assessment.js";
 
 // ── Session replay harness ──────────────────────────────────────────────────────
 // Behavioural convergence fixes (does a real session stop / seal when it should?) are
@@ -212,7 +212,7 @@ test("scenario · ERP Q3: an isolated readable ledger conflict remains open (doc
 // unanimous ledger choice stops cleanly on it (proved above). The only obstacle to agreement here is
 // therefore the unchanged item-003 action split. After the persistence bound it should degrade honestly.
 // Skipped until discussionState() grows a degraded path for stable readable-control ledger conflicts.
-test("scenario · RED spec: a stable isolated ledger conflict among converged readable agents degrades after the bound", { skip: "engine lacks a degraded stop for a stable READABLE ledger-only conflict — unskip in that change" }, () => {
+test("scenario · a stable isolated ledger conflict among converged readable agents degrades after the bound", () => {
   const controls = isolatedLedgerControls();
   const waiting = assess(controls, { registry: LEDGER_CONFLICT_REGISTRY, targetVersion: 3 });
   assert.equal(waiting.allValid, true);

@@ -178,6 +178,13 @@ export function discussionOutcomeReport(outcome, language = "ar") {
   const round = formatLocaleNumber(language, outcome.completedRounds);
   const pendingItems = Array.isArray(outcome.pendingItems) ? outcome.pendingItems.map((item) => item.text) : [];
 
+  if (outcome.phase === "unresolved" && outcome.stopReason === "degraded_ledger_conflict") {
+    const text = en
+      ? `The discussion stopped after ${round} rounds because a readable ledger item-action conflict persisted. The outcome remains unresolved and cannot be executed until that conflict is decided.`
+      : `توقّف النقاش بعد ${round} جولات لأن تعارضًا ثابتًا في إجراءات السجل على البنود ظل مفتوحًا رغم أن مخرجات الوكلاء كانت قابلة للقراءة. النتيجة غير محسومة ولا تُنفّذ حتى يُحسم هذا التعارض.`;
+    return { text, items: pendingItems };
+  }
+
   if (outcome.phase === "converged") {
     // Provider(s) whose control blocked certification in the final round — reused by both the degraded and
     // quorum notes below. Kept in sync with server/orchestrator.js controlBlameLine.

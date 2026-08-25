@@ -2,7 +2,8 @@ import { getSession, listSessions, mutateSession, scratchWorkspacePath, SKIP_SES
 import { terminateProcess } from "./process.js";
 import { provider, providerIds } from "./providers/registry.js";
 import { collaborationPrompt, debatePrompt, synthesisPrompt, chatPrompt, controlRepairPrompt } from "./prompts.js";
-import { assessRound, parseAgentControl, stripAgentControl, validateControlRepair } from "./convergence.js";
+import { assessRound, parseAgentControl, stripAgentControl, validateControlRepair } from "./discussion-assessment.js";
+import { createDegradedPersistenceTracker } from "./degraded-persistence.js";
 import { assertTrustedProject, projectSnapshot } from "./project.js";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -298,9 +299,9 @@ function lastSubstantiveAnswer(session, limit = 4000) {
 }
 
 function discussionOutcomePhase(assessment) {
-  // A degraded stop IS an agreement among the readable participants (one control was unreadable, so the
-  // formal seal failed). Present it as converged; the sealDegraded flag + the report layer add the honest
-  // caveat and name the excluded participant.
+  // A persistent readable ledger split is terminal but still disputed, so it must never become adoptable.
+  if (assessment.degradedStop && assessment.stopReason === "degraded_ledger_conflict") return "unresolved";
+  // The older unreadable-control degraded path remains a readable-side agreement with an honest caveat.
   if (assessment.degradedStop) return "converged";
   if (!assessment.canStop) return "needs_more_rounds";
   // Keyed off the stop reason, not raw completion: an agreed answer that still needs the user
@@ -321,10 +322,9 @@ export function buildDiscussionOutcome(assessment, requestedRounds, completedRou
     phase,
     agreementState: assessment.agreementState,
     completionState: assessment.completionState,
-    stopReason: assessment.canStop
+    stopReason: (assessment.canStop || assessment.degradedStop)
       ? assessment.stopReason
-      : assessment.degradedStop ? "degraded_convergence"
-        : assessment.stopReason === "invalid_control" ? "invalid_control" : "round_limit",
+      : assessment.stopReason === "invalid_control" ? "invalid_control" : "round_limit",
     sealDegraded: assessment.degradedStop === true,
     requestedRounds,
     completedRounds,
@@ -353,6 +353,9 @@ function pendingItemList(outcome) {
 
 function terminalOutcomeReport(outcome) {
   const round = outcome.completedRounds;
+  if (outcome.phase === "unresolved" && outcome.stopReason === "degraded_ledger_conflict") {
+    return `توقّف النقاش بعد ${round} جولات لأن تعارضًا ثابتًا في إجراءات السجل على البنود ظل مفتوحًا رغم أن مخرجات الوكلاء كانت قابلة للقراءة. النتيجة غير محسومة ولا تُنفّذ حتى يُحسم هذا التعارض.${pendingItemList(outcome)}`;
+  }
   if (outcome.phase === "converged") {
     // `converged` now covers "agreed and settled" even when the task itself isn't fully
     // `satisfied` (the agents ran out of substantive work and no agent step is pending), so
@@ -970,7 +973,7 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
     let finalizerFailed = null;
     let proposalVersion = 1;
     let confirmationRoundsRun = 0; // consecutive confirmation rounds so far (bounded by MAX_CONFIRMATION_ROUNDS)
-    let degradedRoundsRun = 0; // consecutive degradable rounds BEFORE the current one (bounded by DEGRADED_STOP_ROUNDS)
+    const degradedPersistence = createDegradedPersistenceTracker(DEGRADED_STOP_ROUNDS);
     // Per-round diagnostics: why each round continued (or stopped) and who changed the proposal. Recorded
     // for every assessed round so a run is diagnosable from its outcome/export, not only the final state.
     const roundDiagnostics = [];
@@ -1088,10 +1091,6 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         // MAX_CONFIRMATION_ROUNDS of them still converged, accept the agreement instead of looping.
         confirmationRoundsRun = confirmationRound ? confirmationRoundsRun + 1 : 0;
         const confirmationsExhausted = confirmationRoundsRun >= MAX_CONFIRMATION_ROUNDS;
-        // Consecutive degradable rounds before this one; once this round would be the DEGRADED_STOP_ROUNDS-th
-        // in a row, allow the honest degraded stop instead of looping to the round limit.
-        degradedRoundsRun = lastAssessment?.degradable === true ? degradedRoundsRun + 1 : 0;
-        const invalidControlExhausted = degradedRoundsRun + 1 >= DEGRADED_STOP_ROUNDS;
         const roundOutcome = await runResilientRound(roster().map((agent) => {
           const prompt = collaborationPrompt({
             session: snapshot,
@@ -1110,7 +1109,9 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMessages = await reconcileRound(roundOutcome, minSurvivors);
-        const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry, confirmationsExhausted, invalidControlExhausted);
+        const degradation = degradedPersistence.boundsFor(roundMessages);
+        const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry, confirmationsExhausted, degradation.exhausted);
+        degradedPersistence.record(assessment, degradation.currentLedgerSignature);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMessages, assessment);
         itemRegistry = assessment.itemRegistry;
@@ -1157,8 +1158,6 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
         const confirmationRound = lastAssessment?.awaitingConfirmation === true;
         confirmationRoundsRun = confirmationRound ? confirmationRoundsRun + 1 : 0;
         const confirmationsExhausted = confirmationRoundsRun >= MAX_CONFIRMATION_ROUNDS;
-        degradedRoundsRun = lastAssessment?.degradable === true ? degradedRoundsRun + 1 : 0;
-        const invalidControlExhausted = degradedRoundsRun + 1 >= DEGRADED_STOP_ROUNDS;
         const rebuttalOutcome = await runResilientRound(roster().map((agent) => {
           const opponent = roster().find((key) => key !== agent);
           const prompt = debatePrompt({
@@ -1180,7 +1179,9 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "rebuttal"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMsgs = await reconcileRound(rebuttalOutcome, minSurvivors);
-        const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry, confirmationsExhausted, invalidControlExhausted);
+        const degradation = degradedPersistence.boundsFor(roundMsgs);
+        const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry, confirmationsExhausted, degradation.exhausted);
+        degradedPersistence.record(assessment, degradation.currentLedgerSignature);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMsgs, assessment);
         itemRegistry = assessment.itemRegistry;

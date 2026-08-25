@@ -59,9 +59,7 @@ async function cleanupSession(id) {
 //
 // Skipped until the readable-ledger degraded engine path lands. Unskip with that implementation.
 for (const mode of ["collaboration", "debate"]) {
-  test(`scenario · RED orchestration (${mode}): changed merge target on the same item resets degraded persistence`, {
-    skip: "orchestrator does not yet track a target-aware ledger-conflict signature — unskip with degraded_ledger_conflict",
-  }, async (t) => {
+  test(`scenario · orchestration (${mode}): changed merge target on the same item resets degraded persistence`, async (t) => {
     const session = await createSession(`ledger-conflict-persistence-${mode}`);
     const seed = [
       createExternal("تحقق خارجي A"),
