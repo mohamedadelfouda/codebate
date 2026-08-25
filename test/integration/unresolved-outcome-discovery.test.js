@@ -9,8 +9,10 @@ import { STRINGS as catalog } from "../../public/strings.js";
 //   persisted message -> latestRunMessages() -> finalReportFrom() -> latestRunFinalReport()
 //   -> renderContextColumn() -> outcomeStatusMarkup()
 //
-// The outcome message is followed by a non-final notice so the test also proves discovery searches backward
-// for the latest terminal report rather than relying on the outcome being the final message in the session.
+// The fixture includes a real agent-authored reply so derivePhase() reaches the Decision state, then places
+// the unresolved terminal outcome before a later non-final notice. That makes both safety assertions real:
+// the browser must discover the unresolved report for the decision card, while the Decision-phase approval
+// gate must still refuse to expose Execute because the terminal outcome is not converged/adoptable.
 //
 // Keep skipped until degraded_ledger_conflict is implemented end-to-end. When unskipped, the browser must
 // discover phase:"unresolved", render its dedicated localized stop label, and still withhold Execute.
@@ -40,10 +42,21 @@ test("scenario · RED browser: terminal unresolved outcome is discovered and ren
           mode: "collaboration",
         },
         {
+          id: "agent-ledger-reply",
+          author: "agent",
+          agent: "claude",
+          content: "The discussion reached a stable reader-facing position, but the ledger action remains disputed.",
+          createdAt: plus(1),
+          phase: "collaboration",
+          mode: "collaboration",
+          round: 5,
+          meta: { status: "complete" },
+        },
+        {
           id: "terminal-unresolved-ledger-conflict",
           author: "system",
           content: "Stored fallback must not be needed by the browser contract.",
-          createdAt: plus(1),
+          createdAt: plus(2),
           phase: "unresolved",
           mode: "collaboration",
           meta: {
@@ -76,7 +89,7 @@ test("scenario · RED browser: terminal unresolved outcome is discovered and ren
           id: "later-non-final-notice",
           author: "system",
           content: "A later non-final notice must not hide the terminal outcome.",
-          createdAt: plus(2),
+          createdAt: plus(3),
           phase: "notice",
           mode: "collaboration",
           meta: { status: "notice" },
@@ -107,8 +120,11 @@ test("scenario · RED browser: terminal unresolved outcome is discovered and ren
     assert.equal(typeof arLabel, "string");
     await waitFor(() => devtools.evaluate(`document.getElementById("contextCol").textContent.includes(${JSON.stringify(arLabel)})`));
 
-    // Safety invariant from the P1 review: terminal does not mean adoptable. An unresolved ledger conflict
-    // may stop the round loop, but the browser must never expose the bridge into execution for it.
+    // The agent reply above is intentional: without it derivePhase() stays at "plan", so .proceed would be
+    // absent regardless of the unresolved-outcome guard. First prove we are exercising the real Decision
+    // approval gate, then prove that gate still withholds Execute for a non-converged terminal outcome.
+    await waitFor(() => devtools.evaluate(`document.documentElement.dataset.phase === "decision"`));
+    assert.equal(await devtools.evaluate(`document.documentElement.dataset.phase`), "decision");
     assert.equal(await devtools.evaluate(`Boolean(document.querySelector("#approvalHost .proceed"))`), false);
   } finally {
     await harness.cleanup();
