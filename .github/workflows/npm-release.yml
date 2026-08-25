@@ -1,0 +1,105 @@
+name: npm release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish (for example v0.2.4)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish npm package
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - name: Require an existing immutable tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_ref="refs/tags/${RELEASE_TAG}"
+          if ! git show-ref --verify --quiet "${tag_ref}"; then
+            echo "${RELEASE_TAG} is not an existing Git tag." >&2
+            exit 1
+          fi
+          tag_commit="$(git rev-list -n 1 "${tag_ref}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "${head_commit}" != "${tag_commit}" ]]; then
+            echo "Checked-out commit does not match ${tag_ref}." >&2
+            exit 1
+          fi
+
+      - name: Set up Node.js and npm auth
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify tag, package version, and changelog
+        run: node scripts/check-release-version.mjs "${RELEASE_TAG}"
+
+      - name: Run CLI release gate
+        run: pnpm run ci
+
+      - name: Run coverage thresholds
+        run: pnpm run test:coverage
+
+      - name: Run browser regressions
+        run: pnpm run test:browser
+
+      - name: Decide npm dist-tag
+        id: channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_tag=latest
+          if [[ "${RELEASE_TAG}" == *-* ]]; then
+            npm_tag=next
+          fi
+          echo "npm_tag=${npm_tag}" >> "${GITHUB_OUTPUT}"
+          echo "npm dist-tag: ${npm_tag}"
+
+      - name: Publish npm package when NPM_TOKEN is configured
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_DIST_TAG: ${{ steps.channel.outputs.npm_tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NODE_AUTH_TOKEN}" ]]; then
+            echo "NPM_TOKEN is not configured; skipping npm publish."
+            exit 0
+          fi
+          version="$(node -p "require('./package.json').version")"
+          if npm view "codebate@${version}" version >/dev/null 2>&1; then
+            echo "codebate@${version} is already published; skipping."
+            exit 0
+          fi
+          echo "Publishing codebate@${version} with npm dist-tag ${NPM_DIST_TAG}."
+          npm publish --access public --tag "${NPM_DIST_TAG}"

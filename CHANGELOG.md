@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- npm/terminal releases are now independent from native desktop installers: `npx codebate` publishes from an Ubuntu-only verified tag workflow, while Windows/macOS/Linux installer failures affect only the desktop release. Existing immutable tags can be republished through a manual verified npm recovery run without moving the tag.
+
 ## 0.2.4 — 2026-08-25
 
 - Persistent readable ledger/action conflicts now stop honestly after a bounded persistence window instead of burning every configured round. These outcomes remain `unresolved`, never `converged`, and cannot surface the Execute action until the conflict is actually resolved.
