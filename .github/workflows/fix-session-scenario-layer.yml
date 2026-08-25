@@ -1,0 +1,57 @@
+name: Fix session scenario layer
+
+on:
+  push:
+    branches:
+      - fix/degraded-ledger-conflict
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/degraded-ledger-conflict
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Patch only the policy contract
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path = 'test/unit/session-scenarios.test.js';
+          let s = fs.readFileSync(path, 'utf8');
+          const exact = (before, after, label) => {
+            if (!s.includes(before)) throw new Error(`missing ${label}`);
+            if (s.indexOf(before) !== s.lastIndexOf(before)) throw new Error(`non-unique ${label}`);
+            s = s.replace(before, after);
+          };
+          exact(
+            'import { assessRound, parseAgentControl } from "../../server/discussion-assessment.js";',
+            'import { assessRound, parseAgentControl } from "../../server/convergence.js";\nimport { assessRound as assessDiscussionRound } from "../../server/discussion-assessment.js";',
+            'assessment imports',
+          );
+          exact(
+            '  const waiting = assess(controls, { registry: LEDGER_CONFLICT_REGISTRY, targetVersion: 3 });',
+            '  const waiting = assessDiscussionRound(controls, 3, LEDGER_CONFLICT_REGISTRY);',
+            'waiting policy call',
+          );
+          exact(
+            '  const exhausted = assess(controls, { registry: LEDGER_CONFLICT_REGISTRY, targetVersion: 3, invalidControlExhausted: true });',
+            '  const exhausted = assessDiscussionRound(controls, 3, LEDGER_CONFLICT_REGISTRY, false, true);',
+            'exhausted policy call',
+          );
+          fs.writeFileSync(path, s);
+          NODE
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add test/unit/session-scenarios.test.js
+          git diff --cached --check
+          git commit -m "test: isolate discussion policy contract"
+          git push origin HEAD:fix/degraded-ledger-conflict
