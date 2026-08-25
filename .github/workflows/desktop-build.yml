@@ -136,7 +136,7 @@ jobs:
           retention-days: 14
 
   publish:
-    name: Publish GitHub release
+    name: Publish GitHub desktop release
     runs-on: ubuntu-latest
     needs: build
 
@@ -146,11 +146,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Node.js and npm auth
+      - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
 
       - name: Verify tag, package version, and changelog again
@@ -191,19 +190,16 @@ jobs:
         run: |
           set -euo pipefail
           prerelease=false
-          npm_tag=latest
           reason="signed stable tag"
           if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
             prerelease=true
-            npm_tag=next
             reason="tag has a prerelease suffix"
           elif [[ -z "${WINDOWS_CERTIFICATE_BASE64}" || -z "${WINDOWS_CERTIFICATE_PASSWORD}" || -z "${MAC_CERTIFICATE_BASE64}" || -z "${MAC_CERTIFICATE_PASSWORD}" || -z "${APPLE_ID_SECRET}" || -z "${APPLE_APP_SPECIFIC_PASSWORD_SECRET}" || -z "${APPLE_TEAM_ID_SECRET}" ]]; then
             prerelease=true
             reason="one or more native signing/notarization secrets are missing"
           fi
           echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
-          echo "npm_tag=${npm_tag}" >> "${GITHUB_OUTPUT}"
-          echo "Release channel: ${reason}; npm dist-tag: ${npm_tag}"
+          echo "Desktop release channel: ${reason}"
 
       - name: Create or refresh GitHub Release
         shell: bash
@@ -223,22 +219,3 @@ jobs:
               --generate-notes \
               "${prerelease_flag[@]}"
           fi
-
-      - name: Publish npm package when NPM_TOKEN is configured
-        shell: bash
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_DIST_TAG: ${{ steps.channel.outputs.npm_tag }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${NODE_AUTH_TOKEN}" ]]; then
-            echo "NPM_TOKEN is not configured; skipping npm publish."
-            exit 0
-          fi
-          version="$(node -p "require('./package.json').version")"
-          if npm view "codebate@${version}" version >/dev/null 2>&1; then
-            echo "codebate@${version} is already published; skipping."
-            exit 0
-          fi
-          echo "Publishing codebate@${version} with npm dist-tag ${NPM_DIST_TAG}."
-          npm publish --access public --tag "${NPM_DIST_TAG}"
