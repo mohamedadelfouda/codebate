@@ -41,11 +41,12 @@ async function cleanupSession(id) {
 // RED orchestration contract for degraded_ledger_conflict persistence.
 //
 // DEGRADED_STOP_ROUNDS is 2, but "two degradable rounds" is not enough: the SAME ledger split must
-// persist. The signature must include the actual per-agent action choices (and merge target), not only
-// the lossy public conflict shape `{ code, itemId }`. A participant changing item-001 from `resolve`
-// to `merge_into(item-003)` is new information even though both rounds surface the same
-// `conflicting_item_actions` / item-001 conflict object, so that action change must reset the streak.
-// The second identical merge-vs-keep_open split may then stop.
+// persist. The signature must include the actual per-agent action choices AND merge target, not only
+// the lossy public conflict shape `{ code, itemId }` or even `{ agent, itemId, action }`.
+//
+// Round 3 and round 4 keep the same contested item and the same `merge_into` action, but Claude changes
+// the target from item-002 to item-003. That target change is new information and must reset the streak.
+// Round 5 repeats merge_into(item-003), and only then may the bounded degraded stop fire.
 //
 // Collaboration and debate maintain separate copies of the degraded-round counter, so this scenario
 // is intentionally data-driven across BOTH modes. Fixing the signature reset in only one loop must
@@ -53,13 +54,13 @@ async function cleanupSession(id) {
 //
 // Current orchestration counts only lastAssessment.degradable. A future implementation that keys the
 // streak on assessment.conflicts alone would still be wrong because plannedRegistryUpdates() exposes
-// conflicts only as `{ code, itemId }`; it would treat rounds 3 and 4 as identical and stop on round 4.
-// The correct action-aware implementation reaches round 5 and only then emits degraded_ledger_conflict.
+// conflicts only as `{ code, itemId }`; an implementation that adds action but omits targetItemId would
+// also still be wrong and would stop on round 4. The correct target-aware implementation reaches round 5.
 //
 // Skipped until the readable-ledger degraded engine path lands. Unskip with that implementation.
 for (const mode of ["collaboration", "debate"]) {
-  test(`scenario · RED orchestration (${mode}): changed ledger action on the same item resets degraded persistence`, {
-    skip: "orchestrator does not yet track an action-aware ledger-conflict signature — unskip with degraded_ledger_conflict",
+  test(`scenario · RED orchestration (${mode}): changed merge target on the same item resets degraded persistence`, {
+    skip: "orchestrator does not yet track a target-aware ledger-conflict signature — unskip with degraded_ledger_conflict",
   }, async (t) => {
     const session = await createSession(`ledger-conflict-persistence-${mode}`);
     const seed = [
@@ -68,28 +69,25 @@ for (const mode of ["collaboration", "debate"]) {
       createExternal("مرساة تحقق خارجي تبقى مفتوحة"),
     ];
 
-    // Round 3: item-001 is contested as resolve vs keep_open.
+    // Round 3: item-001 is contested as merge_into(item-002) vs keep_open.
+    // item-002 remains open, so the merge target is valid.
     const round3Claude = [
-      { action: "resolve", itemId: "item-001" },
+      { action: "merge_into", itemId: "item-001", targetItemId: "item-002" },
       { action: "keep_open", itemId: "item-002" },
       { action: "keep_open", itemId: "item-003" },
     ];
-    const round3Codex = [
+    const codexKeepOpen = [
       { action: "keep_open", itemId: "item-001" },
       { action: "keep_open", itemId: "item-002" },
       { action: "keep_open", itemId: "item-003" },
     ];
 
-    // Rounds 4-5: SAME item-001 remains contested, but Claude changes the actual proposal to
-    // merge_into(item-003). item-003 intentionally stays open, so this is a valid merge alternative.
-    // The public conflict object is still only `{ code: "conflicting_item_actions", itemId: "item-001" }`.
-    const mergeConflictClaude = [
+    // Rounds 4-5: SAME item-001 and SAME `merge_into` action, but Claude switches the target to item-003.
+    // item-003 also remains open, so this second merge alternative is independently valid.
+    // The public conflict object remains identical across rounds 3-5:
+    // `{ code: "conflicting_item_actions", itemId: "item-001" }`.
+    const round4And5Claude = [
       { action: "merge_into", itemId: "item-001", targetItemId: "item-003" },
-      { action: "keep_open", itemId: "item-002" },
-      { action: "keep_open", itemId: "item-003" },
-    ];
-    const mergeConflictCodex = [
-      { action: "keep_open", itemId: "item-001" },
       { action: "keep_open", itemId: "item-002" },
       { action: "keep_open", itemId: "item-003" },
     ];
@@ -101,21 +99,20 @@ for (const mode of ["collaboration", "debate"]) {
       if (claudeCall === 1) return providerResult("Claude opening");
       if (claudeCall === 2) return providerResult(control({ itemProposals: seed, substantiveDelta: true }));
       if (claudeCall === 3) return providerResult(control({ itemProposals: round3Claude, targetVersion: 2 }));
-      return providerResult(control({ itemProposals: mergeConflictClaude, targetVersion: 2 }));
+      return providerResult(control({ itemProposals: round4And5Claude, targetVersion: 2 }));
     });
     t.mock.method(provider("codex"), "run", async () => {
       codexCall += 1;
       if (codexCall === 1) return providerResult("Codex opening");
       if (codexCall === 2) return providerResult(control({ itemProposals: seed, substantiveDelta: true }));
-      if (codexCall === 3) return providerResult(control({ itemProposals: round3Codex, targetVersion: 2 }));
-      return providerResult(control({ itemProposals: mergeConflictCodex, targetVersion: 2 }));
+      return providerResult(control({ itemProposals: codexKeepOpen, targetVersion: 2 }));
     });
 
     try {
       await runOrchestration(session.id, {
         mode,
         rounds: 5,
-        content: "Test action-aware ledger-conflict persistence",
+        content: "Test target-aware ledger-conflict persistence",
         finalizer: "none",
         agents: {
           claude: { enabled: true, role: "Collaborator" },
@@ -126,9 +123,9 @@ for (const mode of ["collaboration", "debate"]) {
       const saved = await getSession(session.id);
       const outcome = saved.messages.find((message) => message.meta?.outcome)?.meta.outcome;
 
-      // Round 3 and round 4 both surface a conflict on item-001, but the actual split changed from
-      // resolve-vs-keep_open to merge_into(item-003)-vs-keep_open. That MUST reset persistence.
-      // Round 5 repeats the merge split and is the first point where the bound is satisfied.
+      // Round 3 and round 4 surface the same public conflict on item-001 and use the same action,
+      // but the merge target changed item-002 -> item-003. That MUST reset persistence.
+      // Round 5 repeats merge_into(item-003) and is the first point where the bound is satisfied.
       assert.equal(outcome.completedRounds, 5);
       assert.equal(outcome.stopReason, "degraded_ledger_conflict");
       assert.equal(outcome.sealDegraded, true);
