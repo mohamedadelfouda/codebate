@@ -32,6 +32,21 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
 
+      - name: Require an existing immutable tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            echo "${RELEASE_TAG} is not an existing Git tag." >&2
+            exit 1
+          fi
+          tag_commit="$(git rev-list -n 1 "${RELEASE_TAG}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "${head_commit}" != "${tag_commit}" ]]; then
+            echo "Checked-out commit does not match ${RELEASE_TAG}." >&2
+            exit 1
+          fi
+
       - name: Set up Node.js and npm auth
         uses: actions/setup-node@v7
         with:
