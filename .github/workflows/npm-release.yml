@@ -30,20 +30,21 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ env.RELEASE_TAG }}
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Require an existing immutable tag
         shell: bash
         run: |
           set -euo pipefail
-          if ! git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+          tag_ref="refs/tags/${RELEASE_TAG}"
+          if ! git show-ref --verify --quiet "${tag_ref}"; then
             echo "${RELEASE_TAG} is not an existing Git tag." >&2
             exit 1
           fi
-          tag_commit="$(git rev-list -n 1 "${RELEASE_TAG}")"
+          tag_commit="$(git rev-list -n 1 "${tag_ref}")"
           head_commit="$(git rev-parse HEAD)"
           if [[ "${head_commit}" != "${tag_commit}" ]]; then
-            echo "Checked-out commit does not match ${RELEASE_TAG}." >&2
+            echo "Checked-out commit does not match ${tag_ref}." >&2
             exit 1
           fi
 
