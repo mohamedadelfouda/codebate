@@ -804,9 +804,15 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       recordControlRepair(controlRepairStats, audit);
     };
 
-    const assessRepairedRound = async (roundMessages, targetVersion, itemRegistry, confirmationsExhausted = false, invalidControlExhausted = false) => {
-      let assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationsExhausted, invalidControlExhausted);
-      if (!assessment.repairTargets.length) return assessment;
+    const assessRepairedRound = async (roundMessages, targetVersion, itemRegistry, confirmationsExhausted = false, degradedPersistence) => {
+      // Repair targets are discovered conservatively without allowing any degraded stop yet. The persistence
+      // decision must be based on the controls that will actually be assessed after repair, not the raw round.
+      let assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationsExhausted, false);
+      if (!assessment.repairTargets.length) {
+        const degradation = degradedPersistence.boundsFor(roundMessages);
+        assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationsExhausted, degradation.exhausted);
+        return { assessment, degradation };
+      }
       const originalControls = roundMessages.map((message) => message.control);
       await Promise.all(assessment.repairTargets.map(async (target) => {
         const message = roundMessages[target.controlIndex];
@@ -820,10 +826,11 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
       }));
       assertRunAcceptsOutput(sessionId, state);
       if (!(await persistRunProgress(session, state, emit))) throw runInactiveError(state);
-      // Re-assess after repair. A control that was unreadable/unrepairable is still invalid here, so the
-      // degraded-stop signal is computed on the POST-repair state — repair gets its chance first.
-      assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationsExhausted, invalidControlExhausted);
-      return assessment;
+      // Compute persistence only after repair has mutated the controls. This keeps the streak keyed to the
+      // actual item/action/merge-target split that the final assessment sees.
+      const degradation = degradedPersistence.boundsFor(roundMessages);
+      assessment = assessRound(roundMessages.map((message) => message.control), targetVersion, itemRegistry, confirmationsExhausted, degradation.exhausted);
+      return { assessment, degradation };
     };
 
     const callAgent = async (agent, prompt, round, phase) => {
@@ -1109,8 +1116,9 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "collaboration"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMessages = await reconcileRound(roundOutcome, minSurvivors);
-        const degradation = degradedPersistence.boundsFor(roundMessages);
-        const assessment = await assessRepairedRound(roundMessages, targetVersion, itemRegistry, confirmationsExhausted, degradation.exhausted);
+        const { assessment, degradation } = await assessRepairedRound(
+          roundMessages, targetVersion, itemRegistry, confirmationsExhausted, degradedPersistence,
+        );
         degradedPersistence.record(assessment, degradation.currentLedgerSignature);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMessages, assessment);
@@ -1179,8 +1187,9 @@ async function runOrchestrationClaimed({ sessionId, request, validatedRequest, e
           return { agent, run: () => callAgent(agent, prompt, round, "rebuttal"), prune: () => pruneFailedAttempt(agent, round) };
         }), state);
         const roundMsgs = await reconcileRound(rebuttalOutcome, minSurvivors);
-        const degradation = degradedPersistence.boundsFor(roundMsgs);
-        const assessment = await assessRepairedRound(roundMsgs, targetVersion, itemRegistry, confirmationsExhausted, degradation.exhausted);
+        const { assessment, degradation } = await assessRepairedRound(
+          roundMsgs, targetVersion, itemRegistry, confirmationsExhausted, degradedPersistence,
+        );
         degradedPersistence.record(assessment, degradation.currentLedgerSignature);
         lastAssessment = assessment;
         recordDiagnostic(round, roundMsgs, assessment);

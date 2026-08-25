@@ -133,3 +133,82 @@ for (const mode of ["collaboration", "debate"]) {
     }
   });
 }
+
+
+// A repair can turn the SAME raw omission into a different real ledger choice. Persistence must therefore
+// sign the post-repair controls. Round 3 repairs item-002 to keep_open; round 4 has the same raw omission
+// but repairs it to resolve, creating a new conflict. That change must reset the streak, so only round 5
+// (which repeats the repaired round-4 split) may stop.
+for (const mode of ["collaboration", "debate"]) {
+  test(`scenario · orchestration (${mode}): repair-mutated ledger actions reset persistence before degraded stop`, async (t) => {
+    const session = await createSession(`ledger-conflict-post-repair-${mode}`);
+    const seed = [
+      createExternal("تحقق خارجي A"),
+      createExternal("تحقق خارجي B"),
+      createExternal("مرساة تحقق خارجي"),
+    ];
+    const codexKeepOpen = [
+      { action: "keep_open", itemId: "item-001" },
+      { action: "keep_open", itemId: "item-002" },
+      { action: "keep_open", itemId: "item-003" },
+    ];
+    const claudeRawOmission = [
+      { action: "merge_into", itemId: "item-001", targetItemId: "item-003" },
+      { action: "keep_open", itemId: "item-003" },
+    ];
+    const claudeRepairKeep = [
+      { action: "merge_into", itemId: "item-001", targetItemId: "item-003" },
+      { action: "keep_open", itemId: "item-002" },
+      { action: "keep_open", itemId: "item-003" },
+    ];
+    const claudeRepairResolve = [
+      { action: "merge_into", itemId: "item-001", targetItemId: "item-003" },
+      { action: "resolve", itemId: "item-002" },
+      { action: "keep_open", itemId: "item-003" },
+    ];
+
+    let claudeCall = 0;
+    let codexCall = 0;
+    t.mock.method(provider("claude"), "run", async () => {
+      claudeCall += 1;
+      if (claudeCall === 1) return providerResult("Claude opening");
+      if (claudeCall === 2) return providerResult(control({ itemProposals: seed, substantiveDelta: true }));
+      if (claudeCall === 3) return providerResult(control({ itemProposals: claudeRawOmission, targetVersion: 2 }));
+      if (claudeCall === 4) return providerResult(control({ itemProposals: claudeRepairKeep, targetVersion: 2 }));
+      if (claudeCall === 5) return providerResult(control({ itemProposals: claudeRawOmission, targetVersion: 2 }));
+      if (claudeCall === 6) return providerResult(control({ itemProposals: claudeRepairResolve, targetVersion: 2 }));
+      return providerResult(control({ itemProposals: claudeRepairResolve, targetVersion: 2 }));
+    });
+    t.mock.method(provider("codex"), "run", async () => {
+      codexCall += 1;
+      if (codexCall === 1) return providerResult("Codex opening");
+      if (codexCall === 2) return providerResult(control({ itemProposals: seed, substantiveDelta: true }));
+      return providerResult(control({ itemProposals: codexKeepOpen, targetVersion: 2 }));
+    });
+
+    try {
+      await runOrchestration(session.id, {
+        mode,
+        rounds: 5,
+        content: "Test post-repair ledger persistence",
+        finalizer: "none",
+        agents: {
+          claude: { enabled: true, role: "Collaborator" },
+          codex: { enabled: true, role: "Collaborator" },
+        },
+      }, () => {});
+
+      const saved = await getSession(session.id);
+      const outcome = saved.messages.find((message) => message.meta?.outcome)?.meta.outcome;
+      assert.equal(outcome.completedRounds, 5);
+      assert.equal(outcome.stopReason, "degraded_ledger_conflict");
+      assert.equal(outcome.sealDegraded, true);
+      assert.deepEqual(outcome.conflicts, [
+        { code: "conflicting_item_actions", itemId: "item-001" },
+        { code: "conflicting_item_actions", itemId: "item-002" },
+      ]);
+    } finally {
+      await cleanupSession(session.id);
+    }
+  });
+}
