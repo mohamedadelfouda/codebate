@@ -148,9 +148,10 @@ test("scenario · unilateral resolve: one agent cannot close the other's open it
 // terminal `goalStatus:"satisfied"` claims that still used keep_open on other items. The latter
 // correctly triggers terminal_item_kept_open and would make this regression pass for the wrong reason.
 //
-// This fixture keeps the real registry and contested action shape, but resolves every NONCONTESTED
-// item in both controls. The only difference is item-003: Codex resolves it while Claude merges it
-// into item-004. That gives us exactly one conflicting_item_actions and zero terminal-item errors.
+// This fixture keeps the real registry and contested action shape. Items 002/005 are resolved in both
+// controls, while item-004 intentionally stays open as the merge target. Both controls therefore use
+// goalStatus:"blocked", which is compatible with item-004's external_validation required step. The only
+// ledger disagreement is item-003: Codex resolves it while Claude merges it into the still-open item-004.
 const LEDGER_CONFLICT_REGISTRY = [
   { itemId: "item-002", kind: "remaining_work", status: "open", text: "جدولة تصدير النسخ الاحتياطية لكل شركة دوريًّا", requiredStep: { actor: "agent", action: "resume_agent_round" } },
   { itemId: "item-003", kind: "remaining_work", status: "open", text: "قياس التسوية الدورية للمخزون قبل الحكم عليها", requiredStep: { actor: "agent", action: "resume_agent_round" } },
@@ -160,21 +161,34 @@ const LEDGER_CONFLICT_REGISTRY = [
 // Controls are built as RAW JSON and passed through the real parseAgentControl, exactly like the
 // orchestrator does — the engine's `valid`/`targetVersion` fields come from validation, not from us.
 const ledgerControl = (overrides) => parseAgentControl(`<agent-control>${JSON.stringify({ controlVersion: 2, targetVersion: 3, ...overrides })}</agent-control>`);
-const resolvedNoncontested = [
+const sharedLedgerActions = [
   { action: "resolve", itemId: "item-002" },
-  { action: "resolve", itemId: "item-004" },
+  { action: "keep_open", itemId: "item-004" },
   { action: "resolve", itemId: "item-005" },
 ];
 const isolatedLedgerControls = () => [
-  ledgerControl({ convergence: "converged", goalStatus: "satisfied", substantiveDelta: false, itemProposals: [
-    ...resolvedNoncontested,
+  ledgerControl({ convergence: "converged", goalStatus: "blocked", substantiveDelta: false, itemProposals: [
+    ...sharedLedgerActions,
     { action: "resolve", itemId: "item-003" },
   ] }),
-  ledgerControl({ convergence: "converged", goalStatus: "satisfied", substantiveDelta: false, itemProposals: [
-    ...resolvedNoncontested,
+  ledgerControl({ convergence: "converged", goalStatus: "blocked", substantiveDelta: false, itemProposals: [
+    ...sharedLedgerActions,
     { action: "merge_into", itemId: "item-003", targetItemId: "item-004" },
   ] }),
 ];
+
+test("scenario · ERP Q3 fixture: either ledger choice is valid when unanimous", () => {
+  const [codexChoice, claudeChoice] = isolatedLedgerControls();
+  for (const choice of [codexChoice, claudeChoice]) {
+    const unanimous = assess([choice, choice], { registry: LEDGER_CONFLICT_REGISTRY, targetVersion: 3 });
+    assert.equal(unanimous.allValid, true);
+    assert.equal(unanimous.consistencyErrors.length, 0);
+    assert.deepEqual(unanimous.conflicts, []);
+    assert.equal(unanimous.agreementState, "converged");
+    assert.equal(unanimous.canStop, true);
+    assert.equal(unanimous.stopReason, "external_block");
+  }
+});
 
 test("scenario · ERP Q3: an isolated readable ledger conflict remains open (documents current behaviour)", () => {
   const [codexR4, claudeR4] = isolatedLedgerControls();
@@ -182,7 +196,7 @@ test("scenario · ERP Q3: an isolated readable ledger conflict remains open (doc
   assert.equal(claudeR4.valid, true); // individually valid — the conflict is BETWEEN them
 
   const r4 = assess([codexR4, claudeR4], { registry: LEDGER_CONFLICT_REGISTRY, targetVersion: 3 });
-  assert.equal(r4.allValid, true); // no schema/terminal-item failure is hiding the ledger conflict
+  assert.equal(r4.allValid, true); // no schema/terminal/merge-target failure is hiding the ledger conflict
   assert.equal(r4.consistencyErrors.length, 0);
   assert.deepEqual(r4.conflicts, [{ code: "conflicting_item_actions", itemId: "item-003" }]);
   assert.equal(r4.agreementState, "open");
@@ -194,8 +208,9 @@ test("scenario · ERP Q3: an isolated readable ledger conflict remains open (doc
 });
 
 // RED spec — the fix contract, written first so the engine change lands against an ISOLATED conflict.
-// There are no terminal_item_kept_open or other consistency errors here: after the persistence bound,
-// the engine should stop honestly because the sole obstacle is the unchanged item-003 ledger split.
+// Item-004 is a compatible external block and does not itself require another agent round; either
+// unanimous ledger choice stops cleanly on it (proved above). The only obstacle to agreement here is
+// therefore the unchanged item-003 action split. After the persistence bound it should degrade honestly.
 // Skipped until discussionState() grows a degraded path for stable readable-control ledger conflicts.
 test("scenario · RED spec: a stable isolated ledger conflict among converged readable agents degrades after the bound", { skip: "engine lacks a degraded stop for a stable READABLE ledger-only conflict — unskip in that change" }, () => {
   const controls = isolatedLedgerControls();
