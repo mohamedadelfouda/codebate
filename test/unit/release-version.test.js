@@ -41,11 +41,17 @@ test("release check does not treat a version as a prefix of another (0.3.0 vs 0.
   assert.equal(checkReleaseVersion({ tag: "v0.3.0", version: "0.3.0", changelog: cl }).ok, false);
 });
 
-test("tag workflow publishes semver prereleases under npm next, never latest", () => {
-  const workflow = readFileSync(join(testDir, "../../.github/workflows/desktop-build.yml"), "utf8");
-  assert.match(workflow, /npm_tag=latest/);
-  assert.match(workflow, /if \[\[ "\$\{GITHUB_REF_NAME\}" == \*-\* \]\]; then[\s\S]*?npm_tag=next/);
-  assert.match(workflow, /NPM_DIST_TAG: \$\{\{ steps\.channel\.outputs\.npm_tag \}\}/);
-  assert.match(workflow, /npm publish --access public --tag "\$\{NPM_DIST_TAG\}"/);
-  assert.doesNotMatch(workflow, /^\s*npm publish --access public\s*$/m);
+test("npm release is independent from desktop builds and keeps prereleases off latest", () => {
+  const npmWorkflow = readFileSync(join(testDir, "../../.github/workflows/npm-release.yml"), "utf8");
+  const desktopWorkflow = readFileSync(join(testDir, "../../.github/workflows/desktop-build.yml"), "utf8");
+
+  assert.match(npmWorkflow, /workflow_dispatch:/);
+  assert.match(npmWorkflow, /npm_tag=latest/);
+  assert.match(npmWorkflow, /if \[\[ "\$\{RELEASE_TAG\}" == \*-\* \]\]; then[\s\S]*?npm_tag=next/);
+  assert.match(npmWorkflow, /NPM_DIST_TAG: \$\{\{ steps\.channel\.outputs\.npm_tag \}\}/);
+  assert.match(npmWorkflow, /npm publish --access public --tag "\$\{NPM_DIST_TAG\}"/);
+  assert.doesNotMatch(npmWorkflow, /^\s*npm publish --access public\s*$/m);
+
+  assert.doesNotMatch(desktopWorkflow, /npm publish/);
+  assert.doesNotMatch(desktopWorkflow, /NPM_TOKEN/);
 });
