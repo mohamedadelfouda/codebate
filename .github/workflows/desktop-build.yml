@@ -156,7 +156,7 @@ jobs:
         run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
 
       - name: Download native artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: codebate-*-${{ github.ref_name }}
           path: release-artifacts
