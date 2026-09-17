@@ -372,3 +372,48 @@ test("transcript headers stay inside the requested context budget", () => {
   }, maxChars);
   assert.ok(transcript.length <= maxChars, `transcript length ${transcript.length} exceeded ${maxChars}`);
 });
+
+test("control contract states targetVersion is required with its exact value", () => {
+  const prompt = collaborationPrompt({ ...base, round: 3, targetVersion: 4 });
+  assert.match(prompt, /<agent-control>\{"targetVersion":4,/);
+  assert.match(prompt, /targetVersion is REQUIRED and must be exactly 4/);
+});
+
+test("repair of a rejected control does not echo its null-filled normalization", () => {
+  const rejected = {
+    valid: false,
+    errorCodes: ["invalid_control_schema"],
+    schemaErrors: ["missing_target_version"],
+    controlVersion: null,
+    convergence: "unknown",
+    converged: false,
+    goalStatus: "incomplete",
+    substantiveDelta: false,
+    itemProposals: [],
+    openPoints: [],
+    open: "",
+    confidence: null,
+    targetVersion: null,
+  };
+  const prompt = controlRepairPrompt({
+    agentLabel: "Claude",
+    role: "Collaborator",
+    priorAnswer: "We agree.",
+    originalControl: rejected,
+    targetVersion: 3,
+    itemRegistry: [],
+    problems: [{ controlIndex: 0, errorCodes: ["invalid_control_schema"], itemIds: [], schemaErrors: ["missing_target_version"] }],
+  });
+
+  assertControlContract(prompt, 3);
+  assert.doesNotMatch(prompt, /"targetVersion":null/);
+  assert.doesNotMatch(prompt, /"confidence":null/);
+  assert.match(prompt, /missing_target_version/);
+  assert.match(prompt, /targetVersion is REQUIRED and must be exactly 3/);
+});
+
+test("control contract shows a complete minimal block with an explicit empty itemProposals", () => {
+  const prompt = collaborationPrompt({ ...base, round: 3, targetVersion: 4 });
+  assert.match(prompt, /itemProposals is REQUIRED; use \[\] when you have no items/);
+  assert.match(prompt, /<agent-control>\{"targetVersion":4,"controlVersion":2,"convergence":"converged","goalStatus":"satisfied","substantiveDelta":false,"itemProposals":\[\]\}<\/agent-control>/);
+});

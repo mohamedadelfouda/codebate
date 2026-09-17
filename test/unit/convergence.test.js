@@ -600,3 +600,58 @@ test("assessment works for every participant count accepted by the protocol", ()
   assert.equal(result.itemRegistry.length, 1);
   assert.equal(result.canStop, true);
 });
+
+test("2026-09-17 regression: a v2 block without targetVersion names the missing field", () => {
+  const withoutTarget = `<agent-control>${JSON.stringify({
+    controlVersion: 2,
+    convergence: "converged",
+    goalStatus: "satisfied",
+    substantiveDelta: false,
+    itemProposals: [],
+  })}</agent-control>`;
+  const parsed = parseAgentControl(withoutTarget);
+
+  assert.equal(parsed.valid, false);
+  assert.deepEqual(parsed.errorCodes, ["invalid_control_schema"]);
+  assert.deepEqual(parsed.schemaErrors, ["missing_target_version"]);
+});
+
+test("schema errors name each broken field instead of a generic rejection", () => {
+  assert.deepEqual(control({ targetVersion: null }).schemaErrors, ["invalid_target_version"]);
+  assert.deepEqual(control({ confidence: null }).schemaErrors, ["forbidden_field:confidence"]);
+  assert.deepEqual(control({ convergence: "agreed" }).schemaErrors, ["invalid_convergence"]);
+  assert.deepEqual(control({ controlVersion: "2" }).schemaErrors, ["unsupported_control_version"]);
+  assert.deepEqual(
+    control({ convergence: "open", itemProposals: [create("user_decision", "x", "orchestrator", "provide_decision")] }).schemaErrors,
+    ["invalid_item_proposal:0"],
+  );
+  assert.deepEqual(
+    control({ itemProposals: [create("disagreement", "x", "agent", "resume_agent_round")] }).schemaErrors,
+    ["converged_with_disagreement"],
+  );
+  assert.deepEqual(legacyBlockControl({ confidence: 2 }).schemaErrors, ["invalid_confidence"]);
+});
+
+test("valid and non-schema failures carry no schemaErrors field", () => {
+  assert.equal("schemaErrors" in control(), false);
+  assert.equal("schemaErrors" in parseAgentControl("reader-facing answer"), false);
+  assert.equal("schemaErrors" in parseAgentControl("<agent-control>{broken}</agent-control>"), false);
+});
+
+test("repair targets forward the named schema errors to the repair prompt", () => {
+  const broken = control({ targetVersion: null });
+  const result = assessRound([broken, control()], 2);
+
+  assert.deepEqual(result.repairTargets, [
+    {
+      controlIndex: 0,
+      errorCodes: ["invalid_control_schema"],
+      itemIds: [],
+      schemaErrors: ["invalid_target_version"],
+    },
+  ]);
+});
+
+function legacyBlockControl(overrides) {
+  return parseAgentControl(legacyBlock(overrides));
+}
