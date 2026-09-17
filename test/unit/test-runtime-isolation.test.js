@@ -10,11 +10,20 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const serverRoot = resolve(here, "../../server");
 const RUNTIME_MODULES = new Set([join(serverRoot, "store.js"), join(serverRoot, "logger.js")]);
+// Deliberately anchored to the first bytes of the file: the isolation import must run before anything else
+// loads, so a leading comment or BOM counts as a violation.
 const ISOLATION_IMPORT = /^import "\.\/_runtime-isolation\.mjs";/;
 
+// Relative module specifiers from static imports, `export … from` re-exports, and dynamic `import("…")`
+// calls with a string literal. A dynamic import of runtime-touching code still loads it in this process.
 function staticImports(file) {
   const source = readFileSync(file, "utf8");
-  const specifiers = [...source.matchAll(/^\s*import\s+(?:[^"';]*?\s+from\s+)?["']([^"']+)["']/gm)].map((m) => m[1]);
+  const patterns = [
+    /^\s*import\s+(?:[^"';]*?\s+from\s+)?["']([^"']+)["']/gm,
+    /^\s*export\s+[^"';]*?\s+from\s+["']([^"']+)["']/gm,
+    /\bimport\(\s*["']([^"']+)["']\s*\)/g,
+  ];
+  const specifiers = patterns.flatMap((pattern) => [...source.matchAll(pattern)].map((m) => m[1]));
   return specifiers.filter((s) => s.startsWith(".")).map((s) => resolve(dirname(file), s));
 }
 
