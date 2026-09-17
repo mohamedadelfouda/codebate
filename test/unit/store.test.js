@@ -1,8 +1,8 @@
+import "./_runtime-isolation.mjs"; // MUST be first — redirects the runtime root before server modules load.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { open, readFile, readdir, rm, stat, writeFile, utimes } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { mkdir, open, readFile, readdir, rm, stat, writeFile, utimes } from "node:fs/promises";
+import { join } from "node:path";
 import {
   createSession,
   saveSession,
@@ -18,11 +18,17 @@ import {
   deleteSession,
   SKIP_SESSION_WRITE,
   directoryFsyncErrorIsFatal,
+  MAX_MESSAGE_CHARS,
+  MAX_USER_MESSAGE_CHARS,
+  rootPath,
 } from "../../server/store.js";
 import { CURRENT_SESSION_SCHEMA_VERSION } from "../../server/session-schema.js";
 
-const sessionsDir = join(dirname(fileURLToPath(import.meta.url)), "../../data/sessions");
-const backupsDir = join(dirname(fileURLToPath(import.meta.url)), "../../data/session-backups");
+// Resolve through the (isolated) runtime root, never the checkout's own data/ folder.
+const sessionsDir = join(rootPath(), "data", "sessions");
+const backupsDir = join(rootPath(), "data", "session-backups");
+await mkdir(sessionsDir, { recursive: true });
+await mkdir(backupsDir, { recursive: true });
 const cleanup = (id) => Promise.all([
   rm(join(sessionsDir, `${id}.json`), { force: true }),
   rm(join(sessionsDir, `${id}.summary.json`), { force: true }),
@@ -406,4 +412,58 @@ test('deleteSession allows sessions whose connector actions are all terminal', a
   } finally {
     await cleanup(session.id);
   }
+});
+
+test("a large user message is stored intact up to the user-message limit", async () => {
+  const s = await createSession("large-user-message");
+  try {
+    const content = "م".repeat(60_000);
+    await saveSession({ ...s, messages: [{ id: "u1", author: "user", content }] });
+    const loaded = await getSession(s.id);
+    assert.equal(loaded.messages[0].content, content);
+    assert.ok(MAX_USER_MESSAGE_CHARS >= 400_000);
+  } finally {
+    await cleanup(s.id);
+  }
+});
+
+test("an agent message is stored up to the declared message limit before a visible truncation marker", async () => {
+  const s = await createSession("large-agent-message");
+  try {
+    const content = "a".repeat(MAX_MESSAGE_CHARS + 500);
+    await saveSession({ ...s, messages: [{ id: "a1", author: "agent", agent: "codex", content: "b".repeat(60_000) }, { id: "a2", author: "agent", agent: "claude", content }] });
+    const loaded = await getSession(s.id);
+    assert.equal(loaded.messages[0].content.length, 60_000);
+    assert.ok(loaded.messages[1].content.startsWith("a".repeat(MAX_MESSAGE_CHARS)));
+    assert.ok(loaded.messages[1].content.endsWith("\n…[stored content truncated]"));
+    assert.equal(loaded.messages[1].content.length, MAX_MESSAGE_CHARS + "\n…[stored content truncated]".length);
+  } finally {
+    await cleanup(s.id);
+  }
+});
+
+test("the over-budget fallback trims agent messages before any user message", async () => {
+  const session = await createSession("byte-budget-user-first");
+  try {
+    const task = "م".repeat(300_000);
+    const agents = Array.from({ length: 129 }, (_, index) => ({ id: `a${index}`, author: "agent", agent: "codex", content: "😀".repeat(50_000) }));
+    session.messages = [{ id: "u1", author: "user", content: task }, ...agents];
+    await saveSession(session);
+    const loaded = await getSession(session.id);
+    assert.equal(loaded.messages[0].id, "u1", "the original task survives the message-count trim");
+    assert.equal(loaded.messages[0].content, task);
+    assert.ok(loaded.messages.slice(1).every((message) => message.content.length < 50_000));
+  } finally { await cleanup(session.id); }
+});
+
+test("user messages are trimmed with a visible marker only when agent trimming is not enough", async () => {
+  const session = await createSession("byte-budget-user-last");
+  try {
+    session.messages = Array.from({ length: 40 }, (_, index) => ({ id: `u${index}`, author: "user", content: "😀".repeat(200_000) }));
+    await saveSession(session);
+    const loaded = await getSession(session.id);
+    const info = await stat(join(sessionsDir, `${session.id}.json`));
+    assert.ok(info.size <= 24 * 1024 * 1024, `stored session was ${info.size} bytes`);
+    assert.ok(loaded.messages.every((message) => message.content.endsWith("\n…[stored content truncated]")));
+  } finally { await cleanup(session.id); }
 });

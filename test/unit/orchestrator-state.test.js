@@ -1,3 +1,4 @@
+import "./_runtime-isolation.mjs"; // MUST be first — redirects the runtime root before server modules load.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
@@ -12,7 +13,7 @@ import {
   stopRun,
   validateOrchestrationRequest,
 } from "../../server/orchestrator.js";
-import { createSession, getSession, mutateSession, rootPath, scratchWorkspacePath } from "../../server/store.js";
+import { createSession, getSession, MAX_USER_MESSAGE_CHARS, mutateSession, rootPath, scratchWorkspacePath } from "../../server/store.js";
 import { provider } from "../../server/providers/registry.js";
 import { claimSessionActivity } from "../../server/session-activity.js";
 import { assessRound, parseAgentControl } from "../../server/convergence.js";
@@ -1030,6 +1031,15 @@ test("orchestration request validation rejects unsupported or inconsistent confi
       label,
     );
   }
+});
+
+test("a user message longer than the stored limit is rejected instead of being silently truncated", () => {
+  const request = collaborationRequest("x".repeat(MAX_USER_MESSAGE_CHARS + 1));
+  assert.throws(
+    () => validateOrchestrationRequest(request),
+    (error) => error.apiStatus === 413 && error.apiCode === "message_too_long",
+  );
+  assert.doesNotThrow(() => validateOrchestrationRequest(collaborationRequest("x".repeat(MAX_USER_MESSAGE_CHARS))));
 });
 
 test("2026-07-16 regression: a persistent failure drops that agent and continues with the survivor", async (t) => {

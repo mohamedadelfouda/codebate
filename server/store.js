@@ -31,7 +31,11 @@ const SCRATCH_WORKSPACE_DIR = path.join(RUNTIME_ROOT, "workspace");
 // status. Per-project subdirs are created by worktree.js.
 const EXECUTION_WORKSPACES_DIR = path.join(RUNTIME_ROOT, "exec-workspaces");
 const MAX_SESSION_MESSAGES = 200;
-const MAX_MESSAGE_CHARS = 100000;
+export const MAX_MESSAGE_CHARS = 100000;
+// A user message can carry up to 300 KB of attachments from the UI plus typed text. It is stored whole up to
+// this limit, and the orchestrator rejects anything longer, so what is persisted (and replayed as the pinned
+// original task in later runs) is exactly what the agents were given.
+export const MAX_USER_MESSAGE_CHARS = 400000;
 const MAX_DECISIONS = 200;
 const MAX_EXECUTIONS = 50;
 const MAX_CONNECTOR_ACTIONS = 100;
@@ -105,11 +109,36 @@ function retainTerminalHistory(records, terminalLimit, isActionable) {
   return records.filter((record) => isActionable(record) || keep.has(record));
 }
 
+const EMERGENCY_MESSAGE_CHARS = 10000;
+const EMERGENCY_MESSAGE_COUNT = 100;
+
+function emergencyBoundMessage(message, trimContent) {
+  return {
+    ...message,
+    content: trimContent ? boundedText(message.content, EMERGENCY_MESSAGE_CHARS) : message.content,
+    meta: boundedJson(message.meta, 5000, (preview) => ({ truncated: true, preview })),
+    control: boundedJson(message.control, 2000, (preview) => ({ truncated: true, preview })),
+  };
+}
+
+// Over-budget fallback for messages. Agent and system content is trimmed first; user messages keep their
+// full text, and the first user message (the pinned original task) survives the count trim. Only if that
+// still cannot fit are user messages trimmed as well, with the visible truncation marker.
+function emergencyBoundMessages(session) {
+  const trimmed = session.messages.map((message) => emergencyBoundMessage(message, message.author !== "user"));
+  const tail = trimmed.slice(-EMERGENCY_MESSAGE_COUNT);
+  const firstUser = trimmed.find((message) => message.author === "user");
+  session.messages = firstUser && !tail.includes(firstUser) ? [firstUser, ...tail.slice(1)] : tail;
+  if (Buffer.byteLength(JSON.stringify(session, null, 2), "utf8") > MAX_SESSION_BYTES) {
+    session.messages = session.messages.map((message) => emergencyBoundMessage(message, true));
+  }
+}
+
 function boundSession(session) {
   if (Array.isArray(session.messages)) {
     session.messages = session.messages.slice(-MAX_SESSION_MESSAGES).map((message) => ({
       ...message,
-      content: boundedText(message.content, 50000),
+      content: boundedText(message.content, message.author === "user" ? MAX_USER_MESSAGE_CHARS : MAX_MESSAGE_CHARS),
       meta: boundedJson(message.meta, 20000, (preview) => ({ truncated: true, preview })),
       control: boundedJson(message.control, 10000, (preview) => ({ truncated: true, preview })),
     }));
@@ -137,12 +166,6 @@ function boundSession(session) {
   session.settings = boundedJson(session.settings, 100000, (preview) => ({ truncated: true, preview }));
   session.connectors = boundedJson(session.connectors, 50000, (preview) => ({ truncated: true, preview }));
   if (Buffer.byteLength(JSON.stringify(session, null, 2), "utf8") > MAX_SESSION_BYTES) {
-    if (Array.isArray(session.messages)) session.messages = session.messages.map((message) => ({
-      ...message,
-      content: boundedText(message.content, 10000),
-      meta: boundedJson(message.meta, 5000, (preview) => ({ truncated: true, preview })),
-      control: boundedJson(message.control, 2000, (preview) => ({ truncated: true, preview })),
-    }));
     if (Array.isArray(session.decisions)) session.decisions = session.decisions.slice(-100).map((decision) => ({ ...decision, reason: boundedText(decision.reason, 2000), metadata: boundedJson(decision.metadata, 2000, (preview) => ({ truncated: true, preview })) }));
     if (Array.isArray(session.executions)) {
       session.executions = retainTerminalHistory(session.executions, 10, executionNeedsRecovery).map((record) => ({
@@ -159,7 +182,7 @@ function boundSession(session) {
     if (Array.isArray(session.connectorReadAudits)) {
       session.connectorReadAudits = session.connectorReadAudits.slice(-50).map(boundConnectorReadAudit);
     }
-    if (Array.isArray(session.messages)) session.messages = session.messages.slice(-100);
+    if (Array.isArray(session.messages)) emergencyBoundMessages(session);
   }
   const storedBytes = Buffer.byteLength(JSON.stringify(session, null, 2), "utf8");
   if (storedBytes > MAX_SESSION_BYTES) {

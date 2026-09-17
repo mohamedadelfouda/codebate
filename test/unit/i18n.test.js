@@ -52,6 +52,7 @@ test("known API, connector, and decision identifiers resolve to catalog keys", (
   assert.equal(errorMessageKey({ code: "session_busy" }), "errorSessionBusy");
   assert.equal(errorMessageKey({ code: "invalid_finalizer" }), "errorInvalidFinalizer");
   assert.equal(errorMessageKey({ code: "provider_unavailable" }), "errorProviderUnavailable");
+  assert.equal(errorMessageKey({ code: "message_too_long" }), "errorMessageTooLong");
   assert.equal(errorMessageKey({ route: { reasonCode: "project_trust_required" } }), "routeProjectTrustRequired");
   assert.equal(errorMessageKey({ code: "future_error" }), "errorUnexpected");
   // P0-3b: server execution errors now carry codes the client localizes (no hardcoded server strings).

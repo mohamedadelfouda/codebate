@@ -1,4 +1,4 @@
-import { getSession, listSessions, mutateSession, scratchWorkspacePath, SKIP_SESSION_WRITE } from "./store.js";
+import { getSession, listSessions, MAX_USER_MESSAGE_CHARS, mutateSession, scratchWorkspacePath, SKIP_SESSION_WRITE } from "./store.js";
 import { terminateProcess } from "./process.js";
 import { provider, providerIds } from "./providers/registry.js";
 import { collaborationPrompt, debatePrompt, synthesisPrompt, chatPrompt, controlRepairPrompt } from "./prompts.js";
@@ -193,6 +193,15 @@ function orchestrationRounds(rawRounds) {
 function orchestrationTask(content) {
   const userTask = String(content || "").trim();
   if (!userTask) invalidRequest("message_required", "Write a message first");
+  // Reject rather than store a truncated copy: the agents would see the full text now, but the stored
+  // message (the pinned original task for later runs, the UI, the export) would silently lose its tail.
+  if (userTask.length > MAX_USER_MESSAGE_CHARS) {
+    throw expectedApiError(
+      "message_too_long",
+      `Message is too long (${userTask.length} characters; the limit is ${MAX_USER_MESSAGE_CHARS}). Split it or attach less.`,
+      413,
+    );
+  }
   return userTask;
 }
 
