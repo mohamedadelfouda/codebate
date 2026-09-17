@@ -719,3 +719,16 @@ test("a repair may resolve converged_with_disagreement by reopening instead of d
 
   assert.deepEqual(validateControlRepair(original, reopened, target, 2), { valid: true, errorCode: null });
 });
+
+test("combined rejections exclude every contradicted field and keep structural errors", () => {
+  const disagreement = create("disagreement", "Storage choice", "agent", "resume_agent_round");
+  const remaining = create("remaining_work", "Write the migration", "agent", "resume_agent_round");
+
+  const both = control({ itemProposals: [disagreement, remaining] });
+  assert.deepEqual(both.schemaErrors, ["converged_with_disagreement", "satisfied_with_remaining_work"]);
+  assert.deepEqual(both.salvagedFields, { controlVersion: 2, substantiveDelta: false });
+
+  const withMissingTarget = control({ targetVersion: undefined, itemProposals: [disagreement] });
+  assert.deepEqual(withMissingTarget.schemaErrors, ["missing_target_version", "converged_with_disagreement"]);
+  assert.deepEqual(withMissingTarget.salvagedFields, { controlVersion: 2, goalStatus: "satisfied", substantiveDelta: false });
+});
