@@ -181,7 +181,9 @@ function controlShape(targetVersion) {
 }
 
 // Models reliably dropped whichever key came last when they had nothing to propose, so every
-// required field is named and a complete no-items block is shown verbatim.
+// required field is named and a complete no-items body is shown. The body is deliberately NOT
+// wrapped in control tags: a valid tagged example would be accepted as a real vote if a model
+// echoed the prompt, forging agreement.
 function requiredFieldRules(targetVersion) {
   const minimal = JSON.stringify({
     targetVersion,
@@ -192,8 +194,8 @@ function requiredFieldRules(targetVersion) {
     itemProposals: [],
   });
   return `targetVersion is REQUIRED and must be exactly ${targetVersion} (the proposal version you are responding to); a block without it is rejected. itemProposals is REQUIRED; use [] when you have no items. Every field above is required; omit only the per-item fields that do not apply instead of setting them to null.
-Example of a complete block for an agreed answer with no items:
-<agent-control>${minimal}</agent-control>`;
+Shape reference only (untagged; your own values must come from your answer, not from this example) — a complete body for an agreed answer with no items:
+${minimal}`;
 }
 
 // A rejected control is normalized with null placeholders (targetVersion: null, confidence: null…).

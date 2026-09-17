@@ -132,7 +132,7 @@ function versionTwoSchemaErrors(candidate, itemProposals) {
     if (candidate[field] !== undefined) errors.push(`forbidden_field:${field}`);
   }
   if (!Array.isArray(candidate.itemProposals)) return [...errors, "invalid_item_proposals"];
-  if (candidate.itemProposals.length > MAX_ITEMS) errors.push("too_many_item_proposals");
+  if (candidate.itemProposals.length > MAX_ITEMS) return [...errors, "too_many_item_proposals"];
   itemProposals.forEach((proposal, index) => {
     if (!proposal) errors.push(`invalid_item_proposal:${index}`);
   });
@@ -145,7 +145,8 @@ function versionTwoSchemaErrors(candidate, itemProposals) {
 }
 
 function validatedVersionTwo(candidate) {
-  const itemProposals = Array.isArray(candidate.itemProposals) ? candidate.itemProposals.map(normalizeProposal) : [];
+  const proposalsInspectable = Array.isArray(candidate.itemProposals) && candidate.itemProposals.length <= MAX_ITEMS;
+  const itemProposals = proposalsInspectable ? candidate.itemProposals.map(normalizeProposal) : [];
   const schemaErrors = versionTwoSchemaErrors(candidate, itemProposals);
   if (schemaErrors.length) return { schemaErrors };
   return {

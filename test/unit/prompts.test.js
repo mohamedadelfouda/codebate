@@ -415,5 +415,20 @@ test("repair of a rejected control does not echo its null-filled normalization",
 test("control contract shows a complete minimal block with an explicit empty itemProposals", () => {
   const prompt = collaborationPrompt({ ...base, round: 3, targetVersion: 4 });
   assert.match(prompt, /itemProposals is REQUIRED; use \[\] when you have no items/);
-  assert.match(prompt, /<agent-control>\{"targetVersion":4,"controlVersion":2,"convergence":"converged","goalStatus":"satisfied","substantiveDelta":false,"itemProposals":\[\]\}<\/agent-control>/);
+  assert.match(prompt, /\{"targetVersion":4,"controlVersion":2,"convergence":"converged","goalStatus":"satisfied","substantiveDelta":false,"itemProposals":\[\]\}/);
+  assert.doesNotMatch(prompt, /<agent-control>\{"targetVersion":4,"controlVersion":2,"convergence":"converged"/);
+});
+
+test("no control block embedded in a prompt is itself an acceptable control", async () => {
+  const { parseAgentControl } = await import("../../server/convergence.js");
+  const prompts = [
+    collaborationPrompt({ ...base, round: 3, targetVersion: 4 }),
+    debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 4 }),
+    controlRepairPrompt({ agentLabel: "Claude", role: "Collaborator", priorAnswer: "We agree.", targetVersion: 4, problems: [] }),
+  ];
+  for (const prompt of prompts) {
+    const blocks = [...prompt.matchAll(/<agent-control>[\s\S]*?<\/agent-control>/gi)].map((match) => match[0]);
+    assert.ok(blocks.length > 0);
+    for (const block of blocks) assert.equal(parseAgentControl(block).valid, false, block);
+  }
 });

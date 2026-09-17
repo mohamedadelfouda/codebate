@@ -655,3 +655,8 @@ test("repair targets forward the named schema errors to the repair prompt", () =
 function legacyBlockControl(overrides) {
   return parseAgentControl(legacyBlock(overrides));
 }
+
+test("an oversized itemProposals array is rejected on size before its items are inspected", () => {
+  const oversized = Array.from({ length: 21 }, () => ({ action: "bogus" }));
+  assert.deepEqual(control({ convergence: "open", itemProposals: oversized }).schemaErrors, ["too_many_item_proposals"]);
+});
