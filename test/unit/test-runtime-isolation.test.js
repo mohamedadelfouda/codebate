@@ -24,11 +24,11 @@ function reachesRuntime(file, trail = new Set()) {
   if (touchesRuntime.has(file)) return touchesRuntime.get(file);
   if (trail.has(file) || !file.startsWith(serverRoot) || !file.endsWith(".js")) return false;
   trail.add(file);
-  let result = false;
+  let result;
   try {
     result = staticImports(file).some((dep) => reachesRuntime(dep, trail));
   } catch {
-    result = false;
+    result = false; // an unreadable import target cannot reach the runtime modules
   }
   touchesRuntime.set(file, result);
   return result;
