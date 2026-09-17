@@ -1,8 +1,8 @@
+import "./_runtime-isolation.mjs"; // MUST be first — redirects the runtime root before server modules load.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { open, readFile, readdir, rm, stat, writeFile, utimes } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { mkdir, open, readFile, readdir, rm, stat, writeFile, utimes } from "node:fs/promises";
+import { join } from "node:path";
 import {
   createSession,
   saveSession,
@@ -18,11 +18,15 @@ import {
   deleteSession,
   SKIP_SESSION_WRITE,
   directoryFsyncErrorIsFatal,
+  rootPath,
 } from "../../server/store.js";
 import { CURRENT_SESSION_SCHEMA_VERSION } from "../../server/session-schema.js";
 
-const sessionsDir = join(dirname(fileURLToPath(import.meta.url)), "../../data/sessions");
-const backupsDir = join(dirname(fileURLToPath(import.meta.url)), "../../data/session-backups");
+// Resolve through the (isolated) runtime root, never the checkout's own data/ folder.
+const sessionsDir = join(rootPath(), "data", "sessions");
+const backupsDir = join(rootPath(), "data", "session-backups");
+await mkdir(sessionsDir, { recursive: true });
+await mkdir(backupsDir, { recursive: true });
 const cleanup = (id) => Promise.all([
   rm(join(sessionsDir, `${id}.json`), { force: true }),
   rm(join(sessionsDir, `${id}.summary.json`), { force: true }),

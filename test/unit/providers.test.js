@@ -1,3 +1,4 @@
+import "./_runtime-isolation.mjs"; // MUST be first — redirects the runtime root before server modules load.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { provider, providerCatalog, providerIds } from "../../server/providers/registry.js";
