@@ -18,6 +18,8 @@ import {
   deleteSession,
   SKIP_SESSION_WRITE,
   directoryFsyncErrorIsFatal,
+  MAX_MESSAGE_CHARS,
+  MAX_USER_MESSAGE_CHARS,
   rootPath,
 } from "../../server/store.js";
 import { CURRENT_SESSION_SCHEMA_VERSION } from "../../server/session-schema.js";
@@ -409,5 +411,33 @@ test('deleteSession allows sessions whose connector actions are all terminal', a
     await assert.rejects(() => getSession(session.id), /ENOENT|no such file/i);
   } finally {
     await cleanup(session.id);
+  }
+});
+
+test("a large user message is stored intact up to the user-message limit", async () => {
+  const s = await createSession("large-user-message");
+  try {
+    const content = "م".repeat(60_000);
+    await saveSession({ ...s, messages: [{ id: "u1", author: "user", content }] });
+    const loaded = await getSession(s.id);
+    assert.equal(loaded.messages[0].content, content);
+    assert.ok(MAX_USER_MESSAGE_CHARS >= 400_000);
+  } finally {
+    await cleanup(s.id);
+  }
+});
+
+test("an agent message is stored up to the declared message limit before a visible truncation marker", async () => {
+  const s = await createSession("large-agent-message");
+  try {
+    const content = "a".repeat(MAX_MESSAGE_CHARS + 500);
+    await saveSession({ ...s, messages: [{ id: "a1", author: "agent", agent: "codex", content: "b".repeat(60_000) }, { id: "a2", author: "agent", agent: "claude", content }] });
+    const loaded = await getSession(s.id);
+    assert.equal(loaded.messages[0].content.length, 60_000);
+    assert.ok(loaded.messages[1].content.startsWith("a".repeat(MAX_MESSAGE_CHARS)));
+    assert.ok(loaded.messages[1].content.endsWith("\n…[stored content truncated]"));
+    assert.equal(loaded.messages[1].content.length, MAX_MESSAGE_CHARS + "\n…[stored content truncated]".length);
+  } finally {
+    await cleanup(s.id);
   }
 });

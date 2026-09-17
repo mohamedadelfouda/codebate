@@ -31,7 +31,11 @@ const SCRATCH_WORKSPACE_DIR = path.join(RUNTIME_ROOT, "workspace");
 // status. Per-project subdirs are created by worktree.js.
 const EXECUTION_WORKSPACES_DIR = path.join(RUNTIME_ROOT, "exec-workspaces");
 const MAX_SESSION_MESSAGES = 200;
-const MAX_MESSAGE_CHARS = 100000;
+export const MAX_MESSAGE_CHARS = 100000;
+// A user message can carry up to 300 KB of attachments from the UI plus typed text. It is stored whole up to
+// this limit, and the orchestrator rejects anything longer, so what is persisted (and replayed as the pinned
+// original task in later runs) is exactly what the agents were given.
+export const MAX_USER_MESSAGE_CHARS = 400000;
 const MAX_DECISIONS = 200;
 const MAX_EXECUTIONS = 50;
 const MAX_CONNECTOR_ACTIONS = 100;
@@ -109,7 +113,7 @@ function boundSession(session) {
   if (Array.isArray(session.messages)) {
     session.messages = session.messages.slice(-MAX_SESSION_MESSAGES).map((message) => ({
       ...message,
-      content: boundedText(message.content, 50000),
+      content: boundedText(message.content, message.author === "user" ? MAX_USER_MESSAGE_CHARS : MAX_MESSAGE_CHARS),
       meta: boundedJson(message.meta, 20000, (preview) => ({ truncated: true, preview })),
       control: boundedJson(message.control, 10000, (preview) => ({ truncated: true, preview })),
     }));
