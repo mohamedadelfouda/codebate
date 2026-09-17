@@ -600,3 +600,135 @@ test("assessment works for every participant count accepted by the protocol", ()
   assert.equal(result.itemRegistry.length, 1);
   assert.equal(result.canStop, true);
 });
+
+test("2026-09-17 regression: a v2 block without targetVersion names the missing field", () => {
+  const withoutTarget = `<agent-control>${JSON.stringify({
+    controlVersion: 2,
+    convergence: "converged",
+    goalStatus: "satisfied",
+    substantiveDelta: false,
+    itemProposals: [],
+  })}</agent-control>`;
+  const parsed = parseAgentControl(withoutTarget);
+
+  assert.equal(parsed.valid, false);
+  assert.deepEqual(parsed.errorCodes, ["invalid_control_schema"]);
+  assert.deepEqual(parsed.schemaErrors, ["missing_target_version"]);
+});
+
+test("schema errors name each broken field instead of a generic rejection", () => {
+  assert.deepEqual(control({ targetVersion: null }).schemaErrors, ["invalid_target_version"]);
+  assert.deepEqual(control({ confidence: null }).schemaErrors, ["forbidden_field:confidence"]);
+  assert.deepEqual(control({ convergence: "agreed" }).schemaErrors, ["invalid_convergence"]);
+  assert.deepEqual(control({ controlVersion: "2" }).schemaErrors, ["unsupported_control_version"]);
+  assert.deepEqual(
+    control({ convergence: "open", itemProposals: [create("user_decision", "x", "orchestrator", "provide_decision")] }).schemaErrors,
+    ["invalid_item_proposal:0"],
+  );
+  assert.deepEqual(
+    control({ itemProposals: [create("disagreement", "x", "agent", "resume_agent_round")] }).schemaErrors,
+    ["converged_with_disagreement"],
+  );
+  assert.deepEqual(legacyBlockControl({ confidence: 2 }).schemaErrors, ["invalid_confidence"]);
+});
+
+test("valid and non-schema failures carry no schemaErrors field", () => {
+  assert.equal("schemaErrors" in control(), false);
+  assert.equal("schemaErrors" in parseAgentControl("reader-facing answer"), false);
+  assert.equal("schemaErrors" in parseAgentControl("<agent-control>{broken}</agent-control>"), false);
+});
+
+test("repair targets forward the named schema errors to the repair prompt", () => {
+  const broken = control({ targetVersion: null });
+  const result = assessRound([broken, control()], 2);
+
+  assert.deepEqual(result.repairTargets, [
+    {
+      controlIndex: 0,
+      errorCodes: ["invalid_control_schema"],
+      itemIds: [],
+      schemaErrors: ["invalid_target_version"],
+    },
+  ]);
+});
+
+function legacyBlockControl(overrides) {
+  return parseAgentControl(legacyBlock(overrides));
+}
+
+test("an oversized itemProposals array is rejected on size before its items are inspected", () => {
+  const oversized = Array.from({ length: 21 }, () => ({ action: "bogus" }));
+  assert.deepEqual(control({ convergence: "open", itemProposals: oversized }).schemaErrors, ["too_many_item_proposals"]);
+});
+
+function missingProposalsBlock() {
+  return `<agent-control>${JSON.stringify({
+    targetVersion: 2,
+    controlVersion: 2,
+    convergence: "converged",
+    goalStatus: "satisfied",
+    substantiveDelta: false,
+  })}</agent-control>`;
+}
+
+test("a schema rejection keeps the individually valid v2 fields for the repair", () => {
+  assert.deepEqual(parseAgentControl(missingProposalsBlock()).salvagedFields, {
+    controlVersion: 2,
+    convergence: "converged",
+    goalStatus: "satisfied",
+    substantiveDelta: false,
+  });
+  assert.deepEqual(control({ convergence: "agreed", itemProposals: "x" }).salvagedFields, {
+    controlVersion: 2,
+    goalStatus: "satisfied",
+    substantiveDelta: false,
+  });
+  assert.equal("salvagedFields" in parseAgentControl("<agent-control>{broken}</agent-control>"), false);
+  assert.equal("salvagedFields" in control({ controlVersion: 7 }), false);
+});
+
+test("repair of a schema rejection may not change a field that was already valid", () => {
+  const original = parseAgentControl(missingProposalsBlock());
+  const target = { controlIndex: 0, errorCodes: ["invalid_control_schema"], itemIds: [], schemaErrors: original.schemaErrors };
+
+  assert.deepEqual(validateControlRepair(original, control({ goalStatus: "incomplete" }), target, 2), {
+    valid: false,
+    errorCode: "repair_scope_violation",
+  });
+  assert.deepEqual(validateControlRepair(original, control(), target, 2), { valid: true, errorCode: null });
+});
+
+test("a field on the contradicted side of a cross-field rule is not salvaged", () => {
+  const disagreement = create("disagreement", "Storage choice", "agent", "resume_agent_round");
+  const remaining = create("remaining_work", "Write the migration", "agent", "resume_agent_round");
+
+  const convergedWithDisagreement = control({ itemProposals: [disagreement] });
+  assert.deepEqual(convergedWithDisagreement.schemaErrors, ["converged_with_disagreement"]);
+  assert.equal("convergence" in convergedWithDisagreement.salvagedFields, false);
+
+  const satisfiedWithRemaining = control({ convergence: "open", itemProposals: [remaining] });
+  assert.deepEqual(satisfiedWithRemaining.schemaErrors, ["satisfied_with_remaining_work"]);
+  assert.equal("goalStatus" in satisfiedWithRemaining.salvagedFields, false);
+});
+
+test("a repair may resolve converged_with_disagreement by reopening instead of dropping the disagreement", () => {
+  const disagreement = create("disagreement", "Storage choice", "agent", "resume_agent_round");
+  const original = control({ itemProposals: [disagreement] });
+  const target = { controlIndex: 0, errorCodes: ["invalid_control_schema"], itemIds: [], schemaErrors: original.schemaErrors };
+  const reopened = control({ convergence: "open", itemProposals: [disagreement] });
+
+  assert.deepEqual(validateControlRepair(original, reopened, target, 2), { valid: true, errorCode: null });
+});
+
+test("combined rejections exclude every contradicted field and keep structural errors", () => {
+  const disagreement = create("disagreement", "Storage choice", "agent", "resume_agent_round");
+  const remaining = create("remaining_work", "Write the migration", "agent", "resume_agent_round");
+
+  const both = control({ itemProposals: [disagreement, remaining] });
+  assert.deepEqual(both.schemaErrors, ["converged_with_disagreement", "satisfied_with_remaining_work"]);
+  assert.deepEqual(both.salvagedFields, { controlVersion: 2, substantiveDelta: false });
+
+  const withMissingTarget = control({ targetVersion: undefined, itemProposals: [disagreement] });
+  assert.deepEqual(withMissingTarget.schemaErrors, ["missing_target_version", "converged_with_disagreement"]);
+  assert.deepEqual(withMissingTarget.salvagedFields, { controlVersion: 2, goalStatus: "satisfied", substantiveDelta: false });
+});

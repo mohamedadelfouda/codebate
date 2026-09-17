@@ -160,8 +160,11 @@ export function transcriptFor(session, maxChars = TRANSCRIPT_BUDGET_CHARS) {
   return parts.join(SEP).slice(0, cap);
 }
 
+// targetVersion leads the shape: models copying the example tended to drop a trailing key after the
+// long itemProposals example, and a missing targetVersion is a hard rejection.
 function controlShape(targetVersion) {
   return JSON.stringify({
+    targetVersion,
     controlVersion: 2,
     convergence: "converged|open|not_evaluated",
     goalStatus: "satisfied|incomplete|blocked|needs_user",
@@ -174,8 +177,37 @@ function controlShape(targetVersion) {
       text: "create only: specific unresolved item",
       requiredStep: { actor: "create only: user|human_operator|orchestrator|agent", action: "create only: provide_decision|run_external_check|resume_agent_round" },
     }],
-    targetVersion,
   });
+}
+
+// Models reliably dropped whichever key came last when they had nothing to propose, so every
+// required field is named and a complete no-items body is shown. The body is deliberately NOT
+// wrapped in control tags: a valid tagged example would be accepted as a real vote if a model
+// echoed the prompt, forging agreement.
+function requiredFieldRules(targetVersion) {
+  const minimal = JSON.stringify({
+    targetVersion,
+    controlVersion: 2,
+    convergence: "converged",
+    goalStatus: "satisfied",
+    substantiveDelta: false,
+    itemProposals: [],
+  });
+  return `targetVersion is REQUIRED and must be exactly ${targetVersion} (the proposal version you are responding to); a block without it is rejected. itemProposals is REQUIRED; use [] when you have no items. Every field above is required; omit only the per-item fields that do not apply instead of setting them to null.
+Shape reference only (your own values must come from your answer, not from this example): the body of an agreed answer with no items is ${minimal} — in your reply it must sit between <agent-control> and a closing </agent-control> tag, with nothing after the closing tag.`;
+}
+
+// Shared by the round contract and the repair prompt: a repair that rebuilds items without these
+// rules invents invalid kind/requiredStep pairs and fails again.
+const ITEM_PROPOSAL_RULES = "itemProposals are proposals, not official state. For a new item use action=create without itemId or targetItemId. For an existing open item reuse its itemId and use keep_open, resolve, or merge_into; merge_into also requires targetItemId. A user_decision requires user/provide_decision. external_validation requires user, human_operator, or orchestrator with run_external_check. disagreement and remaining_work require agent/resume_agent_round. out_of_scope requires user/provide_decision. Do not include confidence or openPoints in version 2.";
+
+// A rejected control is normalized with null placeholders (targetVersion: null, confidence: null…).
+// Showing that object invites the model to copy the nulls back, so only a valid control is echoed.
+function repairControlReference(originalControl) {
+  if (originalControl?.valid) return `Original normalized control:\n${JSON.stringify(originalControl)}`;
+  const rebuild = "Original control: missing or rejected — do not reuse it; rebuild the block from the original answer. The exact rejection reasons are listed in the structured problems below.";
+  if (!originalControl?.salvagedFields) return rebuild;
+  return `${rebuild}\nThese fields were already valid in your rejected block and state your position — keep these exactly: ${JSON.stringify(originalControl.salvagedFields)}`;
 }
 
 function controlInstruction(targetVersion, itemRegistry = [], confirmationRound = false) {
@@ -184,8 +216,9 @@ function controlInstruction(targetVersion, itemRegistry = [], confirmationRound 
     : "";
   return `${confirmation}End with exactly one machine-readable control block after your reader-facing answer:
 <agent-control>${controlShape(targetVersion)}</agent-control>
+${requiredFieldRules(targetVersion)}
 Use convergence=converged only if you agree with the latest proposal. goalStatus describes whether the user's actual task is complete, not whether the agents agree. Set substantiveDelta=true ONLY when your answer MATERIALLY changes the shared proposal — a different decision, a corrected fact, a changed recommendation. Do NOT set it for rephrasing, re-emphasis, extra detail, or re-stating points already on the table: a false substantiveDelta creates a new version and forces another paid round for nothing. If you've genuinely agreed and have nothing material to add, set substantiveDelta=false so the session can stop.
-itemProposals are proposals, not official state. For a new item use action=create without itemId or targetItemId. For an existing open item reuse its itemId and use keep_open, resolve, or merge_into; merge_into also requires targetItemId. A user_decision requires user/provide_decision. external_validation requires user, human_operator, or orchestrator with run_external_check. disagreement and remaining_work require agent/resume_agent_round. out_of_scope requires user/provide_decision. Do not include confidence or openPoints in version 2.
+${ITEM_PROPOSAL_RULES}
 When you and the other agents have genuinely landed in the same place and you're no longer materially changing the proposal, set convergence=converged and substantiveDelta=false so the session can stop early instead of repeating a round with nothing new. goalStatus reflects only whether you can complete THIS answer, not what the user might do afterward: use needs_user (with a user_decision item) only when you genuinely cannot finish your answer until the user decides or supplies missing information, and blocked (with an external_validation item) only when the answer itself cannot be settled until an outside check runs. If you have actually answered the question and the rest is just actions you're recommending the user take next, that is goalStatus=satisfied — put them in your reader-facing answer as next steps, NOT as user_decision or external_validation items. Don't fall back on goalStatus=incomplete just because the task isn't fully finished. Reserve remaining_work for real work another agent round would still add; that is the one signal that legitimately keeps the rounds going.
 Current approved itemRegistry (reuse these IDs; omission never closes an item):
 ${JSON.stringify(itemRegistry)}
@@ -212,8 +245,7 @@ Original reader-facing answer:
 ${boundedExcerpt(priorAnswer, 4000)}
 </original-answer>
 
-Original normalized control:
-${JSON.stringify(originalControl)}
+${repairControlReference(originalControl)}
 
 Current approved itemRegistry:
 ${JSON.stringify(itemRegistry)}
@@ -224,6 +256,8 @@ ${JSON.stringify(problems)}
 Repair only the listed structural problems. When the original control is valid, preserve convergence, goalStatus, substantiveDelta, targetVersion, and every unrelated item proposal exactly unless that specific field is named by a listed problem. For unaddressed_open_item, only add an explicit action for the listed itemId. For target_version_mismatch, only update targetVersion. When the original control is missing or malformed, reconstruct it from the original answer and explicitly address every open registry item with its existing itemId.
 Return exactly one <agent-control> block using this contract:
 <agent-control>${controlShape(targetVersion)}</agent-control>
+${requiredFieldRules(targetVersion)}
+${ITEM_PROPOSAL_RULES}
 Do not use a code fence. Do not write anything after it, and do not write anything before it.`;
 }
 

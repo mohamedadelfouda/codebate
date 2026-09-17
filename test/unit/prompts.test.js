@@ -372,3 +372,96 @@ test("transcript headers stay inside the requested context budget", () => {
   }, maxChars);
   assert.ok(transcript.length <= maxChars, `transcript length ${transcript.length} exceeded ${maxChars}`);
 });
+
+test("control contract states targetVersion is required with its exact value", () => {
+  const prompt = collaborationPrompt({ ...base, round: 3, targetVersion: 4 });
+  assert.match(prompt, /<agent-control>\{"targetVersion":4,/);
+  assert.match(prompt, /targetVersion is REQUIRED and must be exactly 4/);
+});
+
+test("repair of a rejected control does not echo its null-filled normalization", () => {
+  const rejected = {
+    valid: false,
+    errorCodes: ["invalid_control_schema"],
+    schemaErrors: ["missing_target_version"],
+    controlVersion: null,
+    convergence: "unknown",
+    converged: false,
+    goalStatus: "incomplete",
+    substantiveDelta: false,
+    itemProposals: [],
+    openPoints: [],
+    open: "",
+    confidence: null,
+    targetVersion: null,
+  };
+  const prompt = controlRepairPrompt({
+    agentLabel: "Claude",
+    role: "Collaborator",
+    priorAnswer: "We agree.",
+    originalControl: rejected,
+    targetVersion: 3,
+    itemRegistry: [],
+    problems: [{ controlIndex: 0, errorCodes: ["invalid_control_schema"], itemIds: [], schemaErrors: ["missing_target_version"] }],
+  });
+
+  assertControlContract(prompt, 3);
+  assert.doesNotMatch(prompt, /"targetVersion":null/);
+  assert.doesNotMatch(prompt, /"confidence":null/);
+  assert.match(prompt, /missing_target_version/);
+  assert.match(prompt, /targetVersion is REQUIRED and must be exactly 3/);
+});
+
+test("control contract shows a complete minimal block with an explicit empty itemProposals", () => {
+  const prompt = collaborationPrompt({ ...base, round: 3, targetVersion: 4 });
+  assert.match(prompt, /itemProposals is REQUIRED; use \[\] when you have no items/);
+  assert.match(prompt, /\{"targetVersion":4,"controlVersion":2,"convergence":"converged","goalStatus":"satisfied","substantiveDelta":false,"itemProposals":\[\]\}/);
+  assert.doesNotMatch(prompt, /<agent-control>\{"targetVersion":4,"controlVersion":2,"convergence":"converged"/);
+});
+
+test("no control block embedded in a prompt is itself an acceptable control", async () => {
+  const { parseAgentControl } = await import("../../server/convergence.js");
+  const prompts = [
+    collaborationPrompt({ ...base, round: 3, targetVersion: 4 }),
+    debatePrompt({ ...base, opponentLabel: "Codex", round: 3, independent: false, targetVersion: 4 }),
+    controlRepairPrompt({ agentLabel: "Claude", role: "Collaborator", priorAnswer: "We agree.", targetVersion: 4, problems: [] }),
+  ];
+  for (const prompt of prompts) {
+    const blocks = [...prompt.matchAll(/<agent-control>[\s\S]*?<\/agent-control>/gi)].map((match) => match[0]);
+    assert.ok(blocks.length > 0);
+    for (const block of blocks) assert.equal(parseAgentControl(block).valid, false, block);
+  }
+});
+
+test("repair of a rejected control names the valid fields that must be kept", () => {
+  const prompt = controlRepairPrompt({
+    agentLabel: "Claude",
+    role: "Collaborator",
+    priorAnswer: "We agree.",
+    originalControl: {
+      valid: false,
+      errorCodes: ["invalid_control_schema"],
+      schemaErrors: ["invalid_item_proposals"],
+      salvagedFields: { controlVersion: 2, convergence: "converged", goalStatus: "satisfied", substantiveDelta: false },
+      targetVersion: null,
+    },
+    targetVersion: 3,
+    problems: [],
+  });
+  assert.match(prompt, /keep these exactly: \{"controlVersion":2,"convergence":"converged","goalStatus":"satisfied","substantiveDelta":false\}/);
+});
+
+test("the control contract insists on the closing tag after the shape reference", () => {
+  const prompt = collaborationPrompt({ ...base, round: 3, targetVersion: 4 });
+  const referenceAt = prompt.indexOf('{"targetVersion":4,"controlVersion":2,"convergence":"converged"');
+  assert.ok(referenceAt > 0);
+  assert.match(prompt.slice(referenceAt), /^\{[^\n]*\} — in your reply it must sit between <agent-control> and a closing <\/agent-control> tag/);
+});
+
+test("the repair prompt carries the same item rules as the round contract", () => {
+  const repair = controlRepairPrompt({ agentLabel: "Claude", role: "Collaborator", priorAnswer: "We disagree.", targetVersion: 2, problems: [] });
+  const round = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  const rule = "disagreement and remaining_work require agent/resume_agent_round.";
+  assert.ok(round.includes(rule));
+  assert.ok(repair.includes(rule));
+});

@@ -109,25 +109,69 @@ function invalidControl(errorCode = "invalid_control_schema") {
   };
 }
 
-function validBase(candidate) {
-  return isObject(candidate)
-    && CONVERGENCE.has(candidate.convergence)
-    && GOAL_STATUS.has(candidate.goalStatus)
-    && typeof candidate.substantiveDelta === "boolean"
-    && Number.isInteger(candidate.targetVersion)
-    && candidate.targetVersion >= 1;
+// Schema validation names every violated rule. The control still fails closed with the single
+// public code `invalid_control_schema`; `schemaErrors` exists so a rejection is diagnosable and the
+// repair prompt can point the model at the exact field instead of a generic "fix the schema".
+function baseSchemaErrors(candidate) {
+  const errors = [];
+  if (!CONVERGENCE.has(candidate.convergence)) errors.push("invalid_convergence");
+  if (!GOAL_STATUS.has(candidate.goalStatus)) errors.push("invalid_goal_status");
+  if (typeof candidate.substantiveDelta !== "boolean") errors.push("invalid_substantive_delta");
+  if (candidate.targetVersion === undefined) errors.push("missing_target_version");
+  else if (!Number.isInteger(candidate.targetVersion) || candidate.targetVersion < 1) errors.push("invalid_target_version");
+  return errors;
+}
+
+function createsKind(itemProposals, kind) {
+  return itemProposals.some((proposal) => proposal.action === "create" && proposal.kind === kind);
+}
+
+function versionTwoSchemaErrors(candidate, itemProposals) {
+  const errors = baseSchemaErrors(candidate);
+  for (const field of ["openPoints", "confidence"]) {
+    if (candidate[field] !== undefined) errors.push(`forbidden_field:${field}`);
+  }
+  // Without an inspectable proposal list the cross-field checks below cannot run; the structural
+  // error alone is reported.
+  if (!Array.isArray(candidate.itemProposals)) return [...errors, "invalid_item_proposals"];
+  if (candidate.itemProposals.length > MAX_ITEMS) return [...errors, "too_many_item_proposals"];
+  itemProposals.forEach((proposal, index) => {
+    if (!proposal) errors.push(`invalid_item_proposal:${index}`);
+  });
+  const normalized = itemProposals.filter(Boolean);
+  const referencedIds = normalized.filter((proposal) => proposal.action !== "create").map((proposal) => proposal.itemId);
+  if (new Set(referencedIds).size !== referencedIds.length) errors.push("duplicate_item_reference");
+  if (candidate.convergence === "converged" && createsKind(normalized, "disagreement")) errors.push("converged_with_disagreement");
+  if (candidate.goalStatus === "satisfied" && createsKind(normalized, "remaining_work")) errors.push("satisfied_with_remaining_work");
+  return errors;
+}
+
+// The position fields a rejected v2 block already stated validly. A repair may only fix the broken
+// structure, so these are handed to the repairing model and enforced by validateControlRepair.
+// targetVersion is excluded: the repair must always bind to the current round's version.
+// A field named by a cross-field contradiction is not salvaged: pinning `converged` next to a
+// disagreement would leave dropping the disagreement as the only repair, laundering a real
+// disagreement into false agreement. The model must stay free to resolve it either way.
+const CONTRADICTED_FIELD = {
+  converged_with_disagreement: "convergence",
+  satisfied_with_remaining_work: "goalStatus",
+};
+
+function salvagedPositionFields(candidate, schemaErrors) {
+  const contradicted = new Set(schemaErrors.map((error) => CONTRADICTED_FIELD[error]).filter(Boolean));
+  const fields = { controlVersion: CONTROL_VERSION };
+  if (CONVERGENCE.has(candidate.convergence)) fields.convergence = candidate.convergence;
+  if (GOAL_STATUS.has(candidate.goalStatus)) fields.goalStatus = candidate.goalStatus;
+  if (typeof candidate.substantiveDelta === "boolean") fields.substantiveDelta = candidate.substantiveDelta;
+  for (const field of contradicted) delete fields[field];
+  return fields;
 }
 
 function validatedVersionTwo(candidate) {
-  if (!validBase(candidate) || candidate.controlVersion !== CONTROL_VERSION) return null;
-  if (candidate.openPoints !== undefined || candidate.confidence !== undefined) return null;
-  if (!Array.isArray(candidate.itemProposals) || candidate.itemProposals.length > MAX_ITEMS) return null;
-  const itemProposals = candidate.itemProposals.map(normalizeProposal);
-  if (itemProposals.some((proposal) => !proposal)) return null;
-  const referencedIds = itemProposals.filter((proposal) => proposal.action !== "create").map((proposal) => proposal.itemId);
-  if (new Set(referencedIds).size !== referencedIds.length) return null;
-  if (candidate.convergence === "converged" && itemProposals.some((proposal) => proposal.action === "create" && proposal.kind === "disagreement")) return null;
-  if (candidate.goalStatus === "satisfied" && itemProposals.some((proposal) => proposal.action === "create" && proposal.kind === "remaining_work")) return null;
+  const proposalsInspectable = Array.isArray(candidate.itemProposals) && candidate.itemProposals.length <= MAX_ITEMS;
+  const itemProposals = proposalsInspectable ? candidate.itemProposals.map(normalizeProposal) : [];
+  const schemaErrors = versionTwoSchemaErrors(candidate, itemProposals);
+  if (schemaErrors.length) return { schemaErrors, salvagedFields: salvagedPositionFields(candidate, schemaErrors) };
   return {
     valid: true,
     errorCodes: [],
@@ -144,11 +188,19 @@ function validatedVersionTwo(candidate) {
   };
 }
 
+function legacySchemaErrors(candidate) {
+  const errors = baseSchemaErrors(candidate);
+  const openPointsValid = Array.isArray(candidate.openPoints)
+    && candidate.openPoints.length <= MAX_ITEMS
+    && candidate.openPoints.every((point) => typeof point === "string" && point.length <= MAX_ITEM_TEXT);
+  if (!openPointsValid) errors.push("invalid_open_points");
+  if (!Number.isFinite(candidate.confidence) || candidate.confidence < 0 || candidate.confidence > 1) errors.push("invalid_confidence");
+  return errors;
+}
+
 function validatedLegacyControl(candidate) {
-  if (!validBase(candidate) || candidate.controlVersion !== undefined) return null;
-  if (!Array.isArray(candidate.openPoints) || candidate.openPoints.length > MAX_ITEMS) return null;
-  if (!candidate.openPoints.every((point) => typeof point === "string" && point.length <= MAX_ITEM_TEXT)) return null;
-  if (!Number.isFinite(candidate.confidence) || candidate.confidence < 0 || candidate.confidence > 1) return null;
+  const schemaErrors = legacySchemaErrors(candidate);
+  if (schemaErrors.length) return { schemaErrors };
   const openPoints = candidate.openPoints.map((point) => point.trim()).filter(Boolean);
   return {
     valid: true,
@@ -167,7 +219,14 @@ function validatedLegacyControl(candidate) {
 }
 
 function validatedControl(candidate) {
-  return validatedVersionTwo(candidate) || validatedLegacyControl(candidate);
+  if (!isObject(candidate)) return { schemaErrors: ["control_not_object"] };
+  if (candidate.controlVersion === CONTROL_VERSION) return validatedVersionTwo(candidate);
+  if (candidate.controlVersion === undefined) return validatedLegacyControl(candidate);
+  return { schemaErrors: ["unsupported_control_version"] };
+}
+
+function schemaRejection({ schemaErrors, salvagedFields }) {
+  return { ...invalidControl(), schemaErrors, ...(salvagedFields ? { salvagedFields } : {}) };
 }
 
 export function parseAgentControl(text) {
@@ -178,8 +237,11 @@ export function parseAgentControl(text) {
   // version-2 schema stay strict below, so a malformed or off-contract block still fails closed.
   const block = controlBlocks(String(text || "")).at(-1);
   if (!block) return invalidControl("missing_control");
-  try { return validatedControl(JSON.parse(block.inner)) || invalidControl(); }
+  let candidate;
+  try { candidate = JSON.parse(block.inner); }
   catch { return invalidControl("invalid_control_json"); }
+  const validated = validatedControl(candidate);
+  return validated.valid ? validated : schemaRejection(validated);
 }
 
 export function stripAgentControl(text) {
@@ -459,7 +521,9 @@ function repairTargets(controls, targetVersion, consistencyErrors) {
       itemIds.push(error.itemId);
     }
     const repairableCodes = [...errorCodes].filter((code) => CONTROL_REPAIRABLE_ERRORS.has(code));
-    return repairableCodes.length ? [{ controlIndex, errorCodes: repairableCodes, itemIds: [...new Set(itemIds)] }] : [];
+    if (!repairableCodes.length) return [];
+    const target = { controlIndex, errorCodes: repairableCodes, itemIds: [...new Set(itemIds)] };
+    return [control?.schemaErrors?.length ? { ...target, schemaErrors: [...control.schemaErrors] } : target];
   });
 }
 
@@ -682,6 +746,8 @@ export function validateControlRepair(originalControl, repairedControl, repairTa
   if (contractError) return { valid: false, errorCode: contractError };
   const errorCodes = new Set(repairTarget.errorCodes);
   if (!originalControl?.valid || [...errorCodes].some((code) => ["missing_control", "invalid_control_json", "invalid_control_schema"].includes(code))) {
+    const salvaged = Object.entries(originalControl?.salvagedFields || {});
+    if (salvaged.some(([field, value]) => repairedControl[field] !== value)) return { valid: false, errorCode: "repair_scope_violation" };
     return { valid: true, errorCode: null };
   }
   const allowedCodes = new Set(["target_version_mismatch", "unaddressed_open_item"]);
