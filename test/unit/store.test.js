@@ -441,3 +441,29 @@ test("an agent message is stored up to the declared message limit before a visib
     await cleanup(s.id);
   }
 });
+
+test("the over-budget fallback trims agent messages before any user message", async () => {
+  const session = await createSession("byte-budget-user-first");
+  try {
+    const task = "م".repeat(300_000);
+    const agents = Array.from({ length: 129 }, (_, index) => ({ id: `a${index}`, author: "agent", agent: "codex", content: "😀".repeat(50_000) }));
+    session.messages = [{ id: "u1", author: "user", content: task }, ...agents];
+    await saveSession(session);
+    const loaded = await getSession(session.id);
+    assert.equal(loaded.messages[0].id, "u1", "the original task survives the message-count trim");
+    assert.equal(loaded.messages[0].content, task);
+    assert.ok(loaded.messages.slice(1).every((message) => message.content.length < 50_000));
+  } finally { await cleanup(session.id); }
+});
+
+test("user messages are trimmed with a visible marker only when agent trimming is not enough", async () => {
+  const session = await createSession("byte-budget-user-last");
+  try {
+    session.messages = Array.from({ length: 40 }, (_, index) => ({ id: `u${index}`, author: "user", content: "😀".repeat(200_000) }));
+    await saveSession(session);
+    const loaded = await getSession(session.id);
+    const info = await stat(join(sessionsDir, `${session.id}.json`));
+    assert.ok(info.size <= 24 * 1024 * 1024, `stored session was ${info.size} bytes`);
+    assert.ok(loaded.messages.every((message) => message.content.endsWith("\n…[stored content truncated]")));
+  } finally { await cleanup(session.id); }
+});

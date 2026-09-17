@@ -19,6 +19,7 @@ const ERROR_MESSAGE_KEYS = Object.freeze({
   invalid_mode: "errorInvalidDiscussionRequest",
   invalid_rounds: "errorInvalidDiscussionRequest",
   message_required: "errorMessageRequired",
+  message_too_long: "errorMessageTooLong",
   invalid_participants: "errorInvalidParticipants",
   invalid_debate_participants: "errorInvalidDebateParticipants",
   invalid_provider: "errorInvalidProvider",
