@@ -194,8 +194,7 @@ function requiredFieldRules(targetVersion) {
     itemProposals: [],
   });
   return `targetVersion is REQUIRED and must be exactly ${targetVersion} (the proposal version you are responding to); a block without it is rejected. itemProposals is REQUIRED; use [] when you have no items. Every field above is required; omit only the per-item fields that do not apply instead of setting them to null.
-Shape reference only (untagged; your own values must come from your answer, not from this example) — a complete body for an agreed answer with no items:
-${minimal}`;
+Shape reference only (your own values must come from your answer, not from this example): the body of an agreed answer with no items is ${minimal} — in your reply it must sit between <agent-control> and a closing </agent-control> tag, with nothing after the closing tag.`;
 }
 
 // A rejected control is normalized with null placeholders (targetVersion: null, confidence: null…).

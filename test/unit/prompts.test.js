@@ -450,3 +450,10 @@ test("repair of a rejected control names the valid fields that must be kept", ()
   });
   assert.match(prompt, /keep these exactly: \{"controlVersion":2,"convergence":"converged","goalStatus":"satisfied","substantiveDelta":false\}/);
 });
+
+test("the control contract insists on the closing tag after the shape reference", () => {
+  const prompt = collaborationPrompt({ ...base, round: 3, targetVersion: 4 });
+  const referenceAt = prompt.indexOf('{"targetVersion":4,"controlVersion":2,"convergence":"converged"');
+  assert.ok(referenceAt > 0);
+  assert.match(prompt.slice(referenceAt), /^\{[^\n]*\} — in your reply it must sit between <agent-control> and a closing <\/agent-control> tag/);
+});
