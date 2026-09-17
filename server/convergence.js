@@ -144,11 +144,22 @@ function versionTwoSchemaErrors(candidate, itemProposals) {
   return errors;
 }
 
+// The position fields a rejected v2 block already stated validly. A repair may only fix the broken
+// structure, so these are handed to the repairing model and enforced by validateControlRepair.
+// targetVersion is excluded: the repair must always bind to the current round's version.
+function salvagedPositionFields(candidate) {
+  const fields = { controlVersion: CONTROL_VERSION };
+  if (CONVERGENCE.has(candidate.convergence)) fields.convergence = candidate.convergence;
+  if (GOAL_STATUS.has(candidate.goalStatus)) fields.goalStatus = candidate.goalStatus;
+  if (typeof candidate.substantiveDelta === "boolean") fields.substantiveDelta = candidate.substantiveDelta;
+  return fields;
+}
+
 function validatedVersionTwo(candidate) {
   const proposalsInspectable = Array.isArray(candidate.itemProposals) && candidate.itemProposals.length <= MAX_ITEMS;
   const itemProposals = proposalsInspectable ? candidate.itemProposals.map(normalizeProposal) : [];
   const schemaErrors = versionTwoSchemaErrors(candidate, itemProposals);
-  if (schemaErrors.length) return { schemaErrors };
+  if (schemaErrors.length) return { schemaErrors, salvagedFields: salvagedPositionFields(candidate) };
   return {
     valid: true,
     errorCodes: [],
@@ -202,8 +213,8 @@ function validatedControl(candidate) {
   return { schemaErrors: ["unsupported_control_version"] };
 }
 
-function schemaRejection(schemaErrors) {
-  return { ...invalidControl(), schemaErrors };
+function schemaRejection({ schemaErrors, salvagedFields }) {
+  return { ...invalidControl(), schemaErrors, ...(salvagedFields ? { salvagedFields } : {}) };
 }
 
 export function parseAgentControl(text) {
@@ -218,7 +229,7 @@ export function parseAgentControl(text) {
   try { candidate = JSON.parse(block.inner); }
   catch { return invalidControl("invalid_control_json"); }
   const validated = validatedControl(candidate);
-  return validated.valid ? validated : schemaRejection(validated.schemaErrors);
+  return validated.valid ? validated : schemaRejection(validated);
 }
 
 export function stripAgentControl(text) {
@@ -723,6 +734,8 @@ export function validateControlRepair(originalControl, repairedControl, repairTa
   if (contractError) return { valid: false, errorCode: contractError };
   const errorCodes = new Set(repairTarget.errorCodes);
   if (!originalControl?.valid || [...errorCodes].some((code) => ["missing_control", "invalid_control_json", "invalid_control_schema"].includes(code))) {
+    const salvaged = Object.entries(originalControl?.salvagedFields || {});
+    if (salvaged.some(([field, value]) => repairedControl[field] !== value)) return { valid: false, errorCode: "repair_scope_violation" };
     return { valid: true, errorCode: null };
   }
   const allowedCodes = new Set(["target_version_mismatch", "unaddressed_open_item"]);

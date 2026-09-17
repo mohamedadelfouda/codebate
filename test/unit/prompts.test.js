@@ -432,3 +432,21 @@ test("no control block embedded in a prompt is itself an acceptable control", as
     for (const block of blocks) assert.equal(parseAgentControl(block).valid, false, block);
   }
 });
+
+test("repair of a rejected control names the valid fields that must be kept", () => {
+  const prompt = controlRepairPrompt({
+    agentLabel: "Claude",
+    role: "Collaborator",
+    priorAnswer: "We agree.",
+    originalControl: {
+      valid: false,
+      errorCodes: ["invalid_control_schema"],
+      schemaErrors: ["invalid_item_proposals"],
+      salvagedFields: { controlVersion: 2, convergence: "converged", goalStatus: "satisfied", substantiveDelta: false },
+      targetVersion: null,
+    },
+    targetVersion: 3,
+    problems: [],
+  });
+  assert.match(prompt, /keep these exactly: \{"controlVersion":2,"convergence":"converged","goalStatus":"satisfied","substantiveDelta":false\}/);
+});

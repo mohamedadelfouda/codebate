@@ -660,3 +660,40 @@ test("an oversized itemProposals array is rejected on size before its items are 
   const oversized = Array.from({ length: 21 }, () => ({ action: "bogus" }));
   assert.deepEqual(control({ convergence: "open", itemProposals: oversized }).schemaErrors, ["too_many_item_proposals"]);
 });
+
+function missingProposalsBlock() {
+  return `<agent-control>${JSON.stringify({
+    targetVersion: 2,
+    controlVersion: 2,
+    convergence: "converged",
+    goalStatus: "satisfied",
+    substantiveDelta: false,
+  })}</agent-control>`;
+}
+
+test("a schema rejection keeps the individually valid v2 fields for the repair", () => {
+  assert.deepEqual(parseAgentControl(missingProposalsBlock()).salvagedFields, {
+    controlVersion: 2,
+    convergence: "converged",
+    goalStatus: "satisfied",
+    substantiveDelta: false,
+  });
+  assert.deepEqual(control({ convergence: "agreed", itemProposals: "x" }).salvagedFields, {
+    controlVersion: 2,
+    goalStatus: "satisfied",
+    substantiveDelta: false,
+  });
+  assert.equal("salvagedFields" in parseAgentControl("<agent-control>{broken}</agent-control>"), false);
+  assert.equal("salvagedFields" in control({ controlVersion: 7 }), false);
+});
+
+test("repair of a schema rejection may not change a field that was already valid", () => {
+  const original = parseAgentControl(missingProposalsBlock());
+  const target = { controlIndex: 0, errorCodes: ["invalid_control_schema"], itemIds: [], schemaErrors: original.schemaErrors };
+
+  assert.deepEqual(validateControlRepair(original, control({ goalStatus: "incomplete" }), target, 2), {
+    valid: false,
+    errorCode: "repair_scope_violation",
+  });
+  assert.deepEqual(validateControlRepair(original, control(), target, 2), { valid: true, errorCode: null });
+});

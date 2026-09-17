@@ -202,7 +202,9 @@ ${minimal}`;
 // Showing that object invites the model to copy the nulls back, so only a valid control is echoed.
 function repairControlReference(originalControl) {
   if (originalControl?.valid) return `Original normalized control:\n${JSON.stringify(originalControl)}`;
-  return "Original control: missing or rejected — do not reuse it; rebuild the block from the original answer. The exact rejection reasons are listed in the structured problems below.";
+  const rebuild = "Original control: missing or rejected — do not reuse it; rebuild the block from the original answer. The exact rejection reasons are listed in the structured problems below.";
+  if (!originalControl?.salvagedFields) return rebuild;
+  return `${rebuild}\nThese fields were already valid in your rejected block and state your position — keep these exactly: ${JSON.stringify(originalControl.salvagedFields)}`;
 }
 
 function controlInstruction(targetVersion, itemRegistry = [], confirmationRound = false) {
