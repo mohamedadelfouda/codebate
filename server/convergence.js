@@ -131,6 +131,8 @@ function versionTwoSchemaErrors(candidate, itemProposals) {
   for (const field of ["openPoints", "confidence"]) {
     if (candidate[field] !== undefined) errors.push(`forbidden_field:${field}`);
   }
+  // Without an inspectable proposal list the cross-field checks below cannot run; the structural
+  // error alone is reported.
   if (!Array.isArray(candidate.itemProposals)) return [...errors, "invalid_item_proposals"];
   if (candidate.itemProposals.length > MAX_ITEMS) return [...errors, "too_many_item_proposals"];
   itemProposals.forEach((proposal, index) => {
@@ -147,11 +149,21 @@ function versionTwoSchemaErrors(candidate, itemProposals) {
 // The position fields a rejected v2 block already stated validly. A repair may only fix the broken
 // structure, so these are handed to the repairing model and enforced by validateControlRepair.
 // targetVersion is excluded: the repair must always bind to the current round's version.
-function salvagedPositionFields(candidate) {
+// A field named by a cross-field contradiction is not salvaged: pinning `converged` next to a
+// disagreement would leave dropping the disagreement as the only repair, laundering a real
+// disagreement into false agreement. The model must stay free to resolve it either way.
+const CONTRADICTED_FIELD = {
+  converged_with_disagreement: "convergence",
+  satisfied_with_remaining_work: "goalStatus",
+};
+
+function salvagedPositionFields(candidate, schemaErrors) {
+  const contradicted = new Set(schemaErrors.map((error) => CONTRADICTED_FIELD[error]).filter(Boolean));
   const fields = { controlVersion: CONTROL_VERSION };
   if (CONVERGENCE.has(candidate.convergence)) fields.convergence = candidate.convergence;
   if (GOAL_STATUS.has(candidate.goalStatus)) fields.goalStatus = candidate.goalStatus;
   if (typeof candidate.substantiveDelta === "boolean") fields.substantiveDelta = candidate.substantiveDelta;
+  for (const field of contradicted) delete fields[field];
   return fields;
 }
 
@@ -159,7 +171,7 @@ function validatedVersionTwo(candidate) {
   const proposalsInspectable = Array.isArray(candidate.itemProposals) && candidate.itemProposals.length <= MAX_ITEMS;
   const itemProposals = proposalsInspectable ? candidate.itemProposals.map(normalizeProposal) : [];
   const schemaErrors = versionTwoSchemaErrors(candidate, itemProposals);
-  if (schemaErrors.length) return { schemaErrors, salvagedFields: salvagedPositionFields(candidate) };
+  if (schemaErrors.length) return { schemaErrors, salvagedFields: salvagedPositionFields(candidate, schemaErrors) };
   return {
     valid: true,
     errorCodes: [],

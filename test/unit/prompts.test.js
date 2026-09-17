@@ -457,3 +457,11 @@ test("the control contract insists on the closing tag after the shape reference"
   assert.ok(referenceAt > 0);
   assert.match(prompt.slice(referenceAt), /^\{[^\n]*\} — in your reply it must sit between <agent-control> and a closing <\/agent-control> tag/);
 });
+
+test("the repair prompt carries the same item rules as the round contract", () => {
+  const repair = controlRepairPrompt({ agentLabel: "Claude", role: "Collaborator", priorAnswer: "We disagree.", targetVersion: 2, problems: [] });
+  const round = collaborationPrompt({ ...base, round: 3, targetVersion: 2 });
+  const rule = "disagreement and remaining_work require agent/resume_agent_round.";
+  assert.ok(round.includes(rule));
+  assert.ok(repair.includes(rule));
+});

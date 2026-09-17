@@ -697,3 +697,25 @@ test("repair of a schema rejection may not change a field that was already valid
   });
   assert.deepEqual(validateControlRepair(original, control(), target, 2), { valid: true, errorCode: null });
 });
+
+test("a field on the contradicted side of a cross-field rule is not salvaged", () => {
+  const disagreement = create("disagreement", "Storage choice", "agent", "resume_agent_round");
+  const remaining = create("remaining_work", "Write the migration", "agent", "resume_agent_round");
+
+  const convergedWithDisagreement = control({ itemProposals: [disagreement] });
+  assert.deepEqual(convergedWithDisagreement.schemaErrors, ["converged_with_disagreement"]);
+  assert.equal("convergence" in convergedWithDisagreement.salvagedFields, false);
+
+  const satisfiedWithRemaining = control({ convergence: "open", itemProposals: [remaining] });
+  assert.deepEqual(satisfiedWithRemaining.schemaErrors, ["satisfied_with_remaining_work"]);
+  assert.equal("goalStatus" in satisfiedWithRemaining.salvagedFields, false);
+});
+
+test("a repair may resolve converged_with_disagreement by reopening instead of dropping the disagreement", () => {
+  const disagreement = create("disagreement", "Storage choice", "agent", "resume_agent_round");
+  const original = control({ itemProposals: [disagreement] });
+  const target = { controlIndex: 0, errorCodes: ["invalid_control_schema"], itemIds: [], schemaErrors: original.schemaErrors };
+  const reopened = control({ convergence: "open", itemProposals: [disagreement] });
+
+  assert.deepEqual(validateControlRepair(original, reopened, target, 2), { valid: true, errorCode: null });
+});
